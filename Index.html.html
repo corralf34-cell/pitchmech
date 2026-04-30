@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>PitchMech V1</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --navy: #0a0f1e;
+    --navy-mid: #111827;
+    --navy-panel: #1a2235;
+    --navy-card: #1e2d45;
+    --orange: #f97316;
+    --orange-dim: #c2571a;
+    --orange-glow: rgba(249,115,22,0.15);
+    --teal: #14b8a6;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --border: rgba(249,115,22,0.2);
+    --border-dim: rgba(255,255,255,0.08);
+  }
+
+  body {
+    background: var(--navy);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* HEADER */
+  #header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--navy-mid);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  #header h1 {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    color: var(--orange);
+    text-transform: uppercase;
+  }
+  #header .sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+  }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    display: inline-block;
+    margin-right: 6px;
+    transition: background 0.3s;
+  }
+  #status-dot.active { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  #status-dot.loading { background: var(--yellow); }
+  #status-text { font-size: 11px; color: var(--text-dim); }
+
+  /* MAIN AREA */
+  #main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* VIDEO CONTAINER */
+  #video-wrap {
+    position: relative;
+    flex: 1;
+    background: #000;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transform: scaleX(-1); /* mirror for front cam */
+  }
+  #canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  /* CAMERA FLIP */
+  #video.rear { transform: scaleX(1); }
+  #canvas.rear { transform: scaleX(1); }
+
+  /* IDLE OVERLAY */
+  #idle-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10,15,30,0.85);
+    gap: 12px;
+  }
+  #idle-overlay .icon {
+    font-size: 48px;
+    opacity: 0.6;
+  }
+  #idle-overlay p {
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+    max-width: 240px;
+    line-height: 1.6;
+    letter-spacing: 0.05em;
+  }
+
+  /* ANGLE OVERLAYS on video */
+  .angle-badge {
+    position: absolute;
+    background: rgba(10,15,30,0.82);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    pointer-events: none;
+    display: none;
+    line-height: 1.3;
+    white-space: nowrap;
+  }
+  .angle-badge .lbl { color: var(--text-dim); font-weight: 400; font-size: 10px; display: block; }
+  .angle-badge .val { color: var(--orange); }
+  #badge-elbow { top: 25%; right: 8%; }
+  #badge-shoulder { top: 15%; left: 8%; }
+  #badge-hip { top: 55%; right: 8%; }
+  #badge-knee { top: 65%; left: 8%; }
+
+  /* METRICS BAR */
+  #metrics-bar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border-dim);
+    flex-shrink: 0;
+  }
+  .metric-cell {
+    background: var(--navy-panel);
+    padding: 8px 10px;
+    text-align: center;
+  }
+  .metric-cell .m-label {
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 3px;
+  }
+  .metric-cell .m-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--orange);
+    line-height: 1;
+    transition: color 0.2s;
+  }
+  .metric-cell .m-val.good { color: var(--green); }
+  .metric-cell .m-val.warn { color: var(--yellow); }
+  .metric-cell .m-val.bad  { color: var(--red); }
+  .metric-cell .m-unit {
+    font-size: 9px;
+    color: var(--text-dim);
+    display: block;
+    margin-top: 2px;
+  }
+
+  /* CONTROLS BAR */
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--navy-mid);
+    border-top: 1px solid var(--border-dim);
+    flex-shrink: 0;
+  }
+  .btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn.primary {
+    background: var(--orange);
+    border-color: var(--orange);
+    color: #fff;
+  }
+  .btn.primary:hover { background: var(--orange-dim); }
+  .btn.danger {
+    background: rgba(239,68,68,0.15);
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .btn:hover { background: var(--orange-glow); }
+  .btn.sm { padding: 7px 12px; font-size: 11px; }
+  .spacer { flex: 1; }
+
+  /* RECORD BUTTON */
+  #btn-record {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    border: 3px solid var(--orange);
+    background: transparent;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  #btn-record .dot {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--orange);
+    transition: all 0.2s;
+  }
+  #btn-record.recording { border-color: var(--red); }
+  #btn-record.recording .dot {
+    background: var(--red);
+    border-radius: 4px;
+    width: 16px; height: 16px;
+  }
+
+  /* PHASE INDICATOR */
+  #phase-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--navy-mid);
+    border-top: 1px solid var(--border-dim);
+    overflow-x: auto;
+    flex-shrink: 0;
+  }
+  .phase-pill {
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid var(--border-dim);
+    color: var(--text-dim);
+    white-space: nowrap;
+    transition: all 0.2s;
+    background: transparent;
+    cursor: default;
+  }
+  .phase-pill.active {
+    background: var(--orange-glow);
+    border-color: var(--orange);
+    color: var(--orange);
+  }
+
+  /* COACHING CUE PANEL */
+  #cue-panel {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: rgba(10,15,30,0.95);
+    border-top: 1px solid var(--border);
+    padding: 12px 16px;
+    transform: translateY(100%);
+    transition: transform 0.3s ease;
+    z-index: 20;
+  }
+  #cue-panel.show { transform: translateY(0); }
+  #cue-label { font-size: 10px; color: var(--orange); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
+  #cue-text { font-size: 14px; color: var(--text); line-height: 1.5; font-family: 'Georgia', serif; font-style: italic; }
+
+  /* SIDE PANEL for desktop */
+  @media (min-width: 768px) {
+    #main { flex-direction: row; }
+    #video-wrap { flex: 1; }
+    #side-panel {
+      width: 260px;
+      display: flex;
+      flex-direction: column;
+      background: var(--navy-panel);
+      border-left: 1px solid var(--border-dim);
+      overflow-y: auto;
+    }
+    #metrics-bar { display: none; }
+    #phase-bar { border-top: none; border-bottom: 1px solid var(--border-dim); }
+  }
+
+  #side-panel {
+    display: none;
+  }
+  @media (min-width: 768px) {
+    #side-panel { display: flex; }
+  }
+
+  .side-section {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-dim);
+  }
+  .side-title {
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+  .angle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .angle-name { font-size: 12px; color: var(--text-dim); }
+  .angle-num {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--orange);
+    transition: color 0.2s;
+    min-width: 50px;
+    text-align: right;
+  }
+  .angle-num.good { color: var(--green); }
+  .angle-num.warn { color: var(--yellow); }
+  .angle-bar-wrap {
+    height: 3px;
+    background: var(--border-dim);
+    border-radius: 2px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .angle-bar-fill {
+    height: 100%;
+    background: var(--orange);
+    border-radius: 2px;
+    transition: width 0.1s, background 0.2s;
+  }
+
+  .cue-card {
+    background: var(--navy-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .cue-card .cc-phase {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: var(--orange);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .cue-card .cc-text {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.5;
+    font-style: italic;
+    font-family: Georgia, serif;
+  }
+
+  /* SETTINGS PANEL */
+  #settings-panel {
+    position: fixed;
+    inset: 0;
+    background: rgba(10,15,30,0.96);
+    z-index: 50;
+    display: none;
+    flex-direction: column;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  #settings-panel.show { display: flex; }
+  .sp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  .sp-header h2 { font-size: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--orange); }
+  .sp-section { margin-bottom: 20px; }
+  .sp-label { font-size: 10px; color: var(--text-dim); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; display: block; }
+  .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border-dim); }
+  .toggle-row span { font-size: 13px; }
+  .toggle {
+    width: 40px; height: 22px;
+    border-radius: 11px;
+    border: none;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: white;
+    transition: left 0.2s;
+  }
+  .toggle.off { background: #374151; }
+  .toggle.on { background: var(--orange); }
+  .toggle.on::after { left: 21px; }
+
+  select.sp-select {
+    background: var(--navy-card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    width: 100%;
+  }
+
+  /* HANDEDNESS indicator */
+  #hand-badge {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    padding: 3px 8px;
+    border: 1px solid var(--border-dim);
+    border-radius: 4px;
+  }
+  #hand-badge span { color: var(--orange); font-weight: 700; }
+
+  /* LOADING STATE */
+  #loading-msg {
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div id="header">
+  <div>
+    <h1>PitchMech V1</h1>
+    <div class="sub">Mechanics Overlay System</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div id="hand-badge">Throws: <span id="hand-label">RHP</span></div>
+    <span id="status-dot"></span>
+    <span id="status-text" id="loading-msg">Initializing...</span>
+    <button class="btn sm" onclick="toggleSettings()">⚙ Setup</button>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+
+  <!-- VIDEO -->
+  <div id="video-wrap">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <!-- angle badges (mobile overlay) -->
+    <div class="angle-badge" id="badge-elbow">
+      <span class="lbl">Elbow</span>
+      <span class="val" id="badge-elbow-val">—°</span>
+    </div>
+    <div class="angle-badge" id="badge-shoulder">
+      <span class="lbl">Shoulder</span>
+      <span class="val" id="badge-shoulder-val">—°</span>
+    </div>
+    <div class="angle-badge" id="badge-hip">
+      <span class="lbl">Hip-Shoulder Sep</span>
+      <span class="val" id="badge-hip-val">—°</span>
+    </div>
+    <div class="angle-badge" id="badge-knee">
+      <span class="lbl">Lead Knee</span>
+      <span class="val" id="badge-knee-val">—°</span>
+    </div>
+
+    <!-- idle overlay -->
+    <div id="idle-overlay">
+      <div class="icon">⚾</div>
+      <p>Tap "LIVE" to start camera<br>Position pitcher in frame</p>
+    </div>
+
+    <!-- coaching cue popup -->
+    <div id="cue-panel">
+      <div id="cue-label">Coaching Cue</div>
+      <div id="cue-text">—</div>
+    </div>
+  </div>
+
+  <!-- SIDE PANEL (desktop) -->
+  <div id="side-panel">
+    <!-- phases -->
+    <div class="side-section">
+      <div class="side-title">Delivery Phase</div>
+      <div id="phase-bar-side" style="display:flex;flex-wrap:wrap;gap:5px;">
+        <div class="phase-pill active" data-phase="setup">Setup</div>
+        <div class="phase-pill" data-phase="windup">Windup</div>
+        <div class="phase-pill" data-phase="stride">Stride</div>
+        <div class="phase-pill" data-phase="footplant">Foot Plant</div>
+        <div class="phase-pill" data-phase="acceleration">Acceleration</div>
+        <div class="phase-pill" data-phase="release">Release</div>
+        <div class="phase-pill" data-phase="followthrough">Follow Thru</div>
+      </div>
+    </div>
+
+    <!-- angles -->
+    <div class="side-section">
+      <div class="side-title">Joint Angles</div>
+
+      <div class="angle-row">
+        <span class="angle-name">Elbow</span>
+        <span class="angle-num" id="sd-elbow">—°</span>
+      </div>
+      <div class="angle-bar-wrap"><div class="angle-bar-fill" id="bar-elbow" style="width:0%"></div></div>
+
+      <div class="angle-row">
+        <span class="angle-name">Shoulder Abd.</span>
+        <span class="angle-num" id="sd-shoulder">—°</span>
+      </div>
+      <div class="angle-bar-wrap"><div class="angle-bar-fill" id="bar-shoulder" style="width:0%"></div></div>
+
+      <div class="angle-row">
+        <span class="angle-name">Hip-Shoulder Sep</span>
+        <span class="angle-num" id="sd-hip">—°</span>
+      </div>
+      <div class="angle-bar-wrap"><div class="angle-bar-fill" id="bar-hip" style="width:0%"></div></div>
+
+      <div class="angle-row">
+        <span class="angle-name">Lead Knee</span>
+        <span class="angle-num" id="sd-knee">—°</span>
+      </div>
+      <div class="angle-bar-wrap"><div class="angle-bar-fill" id="bar-knee" style="width:0%"></div></div>
+
+      <div class="angle-row">
+        <span class="angle-name">Trunk Tilt</span>
+        <span class="angle-num" id="sd-trunk">—°</span>
+      </div>
+      <div class="angle-bar-wrap"><div class="angle-bar-fill" id="bar-trunk" style="width:0%"></div></div>
+    </div>
+
+    <!-- cues -->
+    <div class="side-section" style="flex:1">
+      <div class="side-title">Active Cues</div>
+      <div id="cue-list">
+        <div style="font-size:12px;color:var(--text-dim);font-style:italic;">Start camera to generate cues...</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- PHASE BAR (mobile) -->
+<div id="phase-bar" style="display:flex;gap:6px;padding:8px 16px;background:var(--navy-mid);border-top:1px solid var(--border-dim);overflow-x:auto;flex-shrink:0;">
+  <div class="phase-pill active" data-phase="setup">Setup</div>
+  <div class="phase-pill" data-phase="windup">Windup</div>
+  <div class="phase-pill" data-phase="stride">Stride</div>
+  <div class="phase-pill" data-phase="footplant">Foot Plant</div>
+  <div class="phase-pill" data-phase="acceleration">Accel.</div>
+  <div class="phase-pill" data-phase="release">Release</div>
+  <div class="phase-pill" data-phase="followthrough">Follow Thru</div>
+</div>
+
+<!-- METRICS BAR (mobile) -->
+<div id="metrics-bar">
+  <div class="metric-cell">
+    <span class="m-label">Elbow</span>
+    <span class="m-val" id="m-elbow">—</span>
+    <span class="m-unit">degrees</span>
+  </div>
+  <div class="metric-cell">
+    <span class="m-label">Hip Sep</span>
+    <span class="m-val" id="m-hip">—</span>
+    <span class="m-unit">degrees</span>
+  </div>
+  <div class="metric-cell">
+    <span class="m-label">Lead Knee</span>
+    <span class="m-val" id="m-knee">—</span>
+    <span class="m-unit">degrees</span>
+  </div>
+  <div class="metric-cell">
+    <span class="m-label">Trunk Tilt</span>
+    <span class="m-val" id="m-trunk">—</span>
+    <span class="m-unit">degrees</span>
+  </div>
+</div>
+
+<!-- CONTROLS -->
+<div id="controls">
+  <button class="btn" id="btn-flip" onclick="flipCamera()">↩ Flip</button>
+  <div class="spacer"></div>
+  <button class="btn primary" id="btn-live" onclick="startCamera()">▶ LIVE</button>
+  <button id="btn-record" onclick="toggleRecord()" title="Record">
+    <div class="dot"></div>
+  </button>
+  <button class="btn danger" id="btn-stop" onclick="stopCamera()" style="display:none;">■ STOP</button>
+  <div class="spacer"></div>
+  <button class="btn sm" onclick="showCue()">💬 Cue</button>
+</div>
+
+<!-- SETTINGS PANEL -->
+<div id="settings-panel">
+  <div class="sp-header">
+    <h2>⚙ Setup</h2>
+    <button class="btn sm" onclick="toggleSettings()">✕ Close</button>
+  </div>
+
+  <div class="sp-section">
+    <span class="sp-label">Pitcher Hand</span>
+    <div class="toggle-row">
+      <span>Right-Handed (RHP)</span>
+      <button class="toggle on" id="toggle-hand" onclick="toggleHand()"></button>
+    </div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">Flips angle grading benchmarks for LHP</div>
+  </div>
+
+  <div class="sp-section">
+    <span class="sp-label">Overlay Options</span>
+    <div class="toggle-row">
+      <span>Show Skeleton</span>
+      <button class="toggle on" id="toggle-skeleton" onclick="toggleOpt('skeleton')"></button>
+    </div>
+    <div class="toggle-row">
+      <span>Show Angle Labels</span>
+      <button class="toggle on" id="toggle-angles" onclick="toggleOpt('angles')"></button>
+    </div>
+    <div class="toggle-row">
+      <span>Highlight Problem Joints</span>
+      <button class="toggle on" id="toggle-highlight" onclick="toggleOpt('highlight')"></button>
+    </div>
+    <div class="toggle-row">
+      <span>Mirror Video (Front Cam)</span>
+      <button class="toggle on" id="toggle-mirror" onclick="toggleOpt('mirror')"></button>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <span class="sp-label">Camera</span>
+    <select class="sp-select" id="cam-select" onchange="changeCam()">
+      <option value="user">Front Camera</option>
+      <option value="environment" selected>Rear Camera</option>
+    </select>
+  </div>
+
+  <div class="sp-section">
+    <span class="sp-label">Pitch Type (Grading Context)</span>
+    <select class="sp-select" id="pitch-select">
+      <option value="fb">Fastball / Sinker</option>
+      <option value="cb">Curveball / Breaking Ball</option>
+      <option value="ch">Changeup / Offspeed</option>
+    </select>
+  </div>
+
+  <div class="sp-section">
+    <span class="sp-label">Level</span>
+    <select class="sp-select" id="level-select">
+      <option value="pro">Pro / College</option>
+      <option value="hs">High School</option>
+      <option value="youth">Youth</option>
+    </select>
+  </div>
+</div>
+
+<!-- MediaPipe Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────────────────────────
+const state = {
+  cameraActive: false,
+  recording: false,
+  isRHP: true,
+  facingMode: 'environment',
+  opts: { skeleton: true, angles: true, highlight: true, mirror: true },
+  currentPhase: 'setup',
+  landmarks: null,
+  stream: null,
+  poseReady: false,
+  cueTimeout: null,
+};
+
+// ─── COACHING CUES (Weinstein/Strom vocabulary) ───────────────────────────────
+const CUES = {
+  setup:        ["Land in balance, gather from the ground up.", "Feel the ground, load the hip."],
+  windup:       ["Controlled rhythm — don't rush the hip load.", "Slow hands, fast hips."],
+  stride:       ["Drive the hip, not the knee. Stay tall.", "Hip to hip, keep the front side closed."],
+  footplant:    ["Stack on landing. Knee over toe.", "Firm front side — don't let it fly open."],
+  acceleration: ["Hips first, then the arm comes through. Sequence it.", "Keep the elbow up, finish the hip turn."],
+  release:      ["Trust the arm, release out front.", "Extension through the release — finish to the glove."],
+  followthrough: ["Finish low, get your shoulder to the hip.", "Decelerate safely — rotate through the ball."],
+};
+
+// ─── BENCHMARKS (degrees) ─────────────────────────────────────────────────────
+// [good_min, good_max]
+const BENCH = {
+  elbow:    [85, 100],   // elbow at acceleration
+  shoulder: [85, 100],   // shoulder abduction
+  hip:      [30, 60],    // hip-shoulder separation
+  knee:     [140, 170],  // lead knee at foot plant
+  trunk:    [20, 40],    // lateral trunk tilt at release
+};
+
+// ─── POSE SETUP ──────────────────────────────────────────────────────────────
+let pose = null;
+let mpCamera = null;
+
+function initPose() {
+  setStatus('loading', 'Loading AI model...');
+  pose = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  });
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.5,
+  });
+  pose.onResults(onResults);
+  pose.initialize().then(() => {
+    state.poseReady = true;
+    setStatus('ready', 'Model ready');
+  }).catch(e => {
+    setStatus('off', 'Model load failed');
+    console.error(e);
+  });
+}
+
+// ─── CAMERA ──────────────────────────────────────────────────────────────────
+async function startCamera() {
+  if (state.cameraActive) return;
+  if (!state.poseReady) {
+    setStatus('loading', 'Model loading...');
+    return;
+  }
+  try {
+    setStatus('loading', 'Opening camera...');
+    const video = document.getElementById('video');
+    const constraints = {
+      video: {
+        facingMode: state.facingMode,
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      }
+    };
+    state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = state.stream;
+    await video.play();
+    state.cameraActive = true;
+
+    document.getElementById('idle-overlay').style.display = 'none';
+    document.getElementById('btn-live').style.display = 'none';
+    document.getElementById('btn-stop').style.display = '';
+    applyMirror();
+    setStatus('active', 'Tracking...');
+    runPose();
+  } catch(e) {
+    setStatus('off', 'Camera denied');
+    console.error(e);
+  }
+}
+
+function stopCamera() {
+  if (state.stream) {
+    state.stream.getTracks().forEach(t => t.stop());
+    state.stream = null;
+  }
+  state.cameraActive = false;
+  state.recording = false;
+  document.getElementById('video').srcObject = null;
+  document.getElementById('idle-overlay').style.display = '';
+  document.getElementById('btn-live').style.display = '';
+  document.getElementById('btn-stop').style.display = 'none';
+  document.getElementById('btn-record').classList.remove('recording');
+  clearCanvas();
+  setStatus('off', 'Stopped');
+  resetMetrics();
+}
+
+function flipCamera() {
+  state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
+  applyMirror();
+  if (state.cameraActive) {
+    stopCamera();
+    setTimeout(startCamera, 300);
+  }
+}
+
+function changeCam() {
+  const sel = document.getElementById('cam-select').value;
+  state.facingMode = sel;
+  if (state.cameraActive) { stopCamera(); setTimeout(startCamera, 300); }
+}
+
+function applyMirror() {
+  const v = document.getElementById('video');
+  const c = document.getElementById('canvas');
+  const shouldMirror = state.facingMode === 'user' && state.opts.mirror;
+  v.style.transform = shouldMirror ? 'scaleX(-1)' : 'scaleX(1)';
+}
+
+// ─── POSE LOOP ────────────────────────────────────────────────────────────────
+function runPose() {
+  const video = document.getElementById('video');
+  if (!state.cameraActive) return;
+  async function frame() {
+    if (!state.cameraActive) return;
+    if (video.readyState >= 2) {
+      try { await pose.send({ image: video }); } catch(e) {}
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ─── RESULTS ─────────────────────────────────────────────────────────────────
+function onResults(results) {
+  const canvas = document.getElementById('canvas');
+  const video = document.getElementById('video');
+  canvas.width = video.videoWidth || video.clientWidth;
+  canvas.height = video.videoHeight || video.clientHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!results.poseLandmarks) { resetMetrics(); return; }
+  state.landmarks = results.poseLandmarks;
+
+  if (state.opts.skeleton) drawSkeleton(ctx, results.poseLandmarks, canvas.width, canvas.height);
+
+  const angles = computeAngles(results.poseLandmarks);
+  updateUI(angles);
+  detectPhase(results.poseLandmarks, angles);
+}
+
+// ─── SKELETON DRAWING ─────────────────────────────────────────────────────────
+const CONNECTIONS = [
+  // torso
+  [11,12],[11,23],[12,24],[23,24],
+  // right arm
+  [12,14],[14,16],[16,18],[16,20],
+  // left arm
+  [11,13],[13,15],[15,17],[15,19],
+  // right leg
+  [24,26],[26,28],[28,30],[28,32],
+  // left leg
+  [23,25],[25,27],[27,29],[27,31],
+  // face
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
+];
+
+function px(lm, w, h) { return { x: lm.x * w, y: lm.y * h, z: lm.z, v: lm.visibility }; }
+
+function drawSkeleton(ctx, lms, w, h) {
+  // connections
+  ctx.lineWidth = 2.5;
+  for (const [a, b] of CONNECTIONS) {
+    const la = lms[a], lb = lms[b];
+    if (la.visibility < 0.4 || lb.visibility < 0.4) continue;
+    const pa = px(la, w, h), pb = px(lb, w, h);
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(249,115,22,0.7)';
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.stroke();
+  }
+  // joints
+  for (let i = 0; i < lms.length; i++) {
+    const lm = lms[i];
+    if (lm.visibility < 0.4) continue;
+    const p = px(lm, w, h);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = i === 16 || i === 15 ? '#14b8a6' : 'rgba(249,115,22,0.9)';
+    ctx.fill();
+  }
+}
+
+// ─── ANGLE MATH ──────────────────────────────────────────────────────────────
+function angleBetween(a, b, c) {
+  const ba = { x: a.x - b.x, y: a.y - b.y };
+  const bc = { x: c.x - b.x, y: c.y - b.y };
+  const dot = ba.x * bc.x + ba.y * bc.y;
+  const mag = Math.sqrt(ba.x**2 + ba.y**2) * Math.sqrt(bc.x**2 + bc.y**2);
+  if (mag === 0) return 0;
+  return Math.round(Math.acos(Math.min(1, Math.max(-1, dot / mag))) * 180 / Math.PI);
+}
+
+function computeAngles(lms) {
+  const L = lms;
+  const isRHP = state.isRHP;
+
+  // For RHP: throwing arm is RIGHT (indices 12,14,16)
+  // For LHP: throwing arm is LEFT (indices 11,13,15)
+  const shoulder = isRHP ? L[12] : L[11];
+  const elbow    = isRHP ? L[14] : L[13];
+  const wrist    = isRHP ? L[16] : L[15];
+  const hip_t    = isRHP ? L[24] : L[23]; // throwing side hip
+  const hip_g    = isRHP ? L[23] : L[24]; // glove side hip
+  const knee_l   = isRHP ? L[25] : L[26]; // lead knee (opposite side)
+  const ankle_l  = isRHP ? L[27] : L[28];
+  const hip_l    = isRHP ? L[23] : L[24]; // lead hip
+
+  const elbowAngle    = (elbow.visibility > 0.4 && shoulder.visibility > 0.4 && wrist.visibility > 0.4)
+    ? angleBetween(shoulder, elbow, wrist) : null;
+
+  const shoulderAngle = (shoulder.visibility > 0.4 && L[12].visibility > 0.4 && L[11].visibility > 0.4)
+    ? angleBetween(L[11], shoulder, hip_t) : null;
+
+  // Hip-shoulder separation: angle between hip line and shoulder line
+  const hipSep = (L[11].visibility > 0.4 && L[12].visibility > 0.4 && L[23].visibility > 0.4 && L[24].visibility > 0.4)
+    ? (() => {
+        const shoulderVec = { x: L[12].x - L[11].x, y: L[12].y - L[11].y };
+        const hipVec      = { x: L[24].x - L[23].x, y: L[24].y - L[23].y };
+        const dot = shoulderVec.x * hipVec.x + shoulderVec.y * hipVec.y;
+        const mag = Math.sqrt(shoulderVec.x**2+shoulderVec.y**2) * Math.sqrt(hipVec.x**2+hipVec.y**2);
+        return mag > 0 ? Math.round(Math.acos(Math.min(1,Math.max(-1,dot/mag))) * 180/Math.PI) : null;
+      })() : null;
+
+  const leadKnee = (hip_l.visibility > 0.4 && knee_l.visibility > 0.4 && ankle_l.visibility > 0.4)
+    ? angleBetween(hip_l, knee_l, ankle_l) : null;
+
+  // Trunk tilt: angle of spine from vertical
+  const trunkTilt = (L[11].visibility > 0.4 && L[12].visibility > 0.4 && L[23].visibility > 0.4 && L[24].visibility > 0.4)
+    ? (() => {
+        const midShoulder = { x: (L[11].x+L[12].x)/2, y: (L[11].y+L[12].y)/2 };
+        const midHip      = { x: (L[23].x+L[24].x)/2, y: (L[23].y+L[24].y)/2 };
+        const spineVec    = { x: midShoulder.x - midHip.x, y: midShoulder.y - midHip.y };
+        const vertVec     = { x: 0, y: -1 };
+        const dot = spineVec.x*vertVec.x + spineVec.y*vertVec.y;
+        const mag = Math.sqrt(spineVec.x**2+spineVec.y**2);
+        return mag > 0 ? Math.round(Math.acos(Math.min(1,Math.max(-1,dot/mag))) * 180/Math.PI) : null;
+      })() : null;
+
+  return { elbow: elbowAngle, shoulder: shoulderAngle, hip: hipSep, knee: leadKnee, trunk: trunkTilt };
+}
+
+// ─── PHASE DETECTION ─────────────────────────────────────────────────────────
+function detectPhase(lms, angles) {
+  // Simple heuristic phase detection based on body position
+  const L = lms;
+  if (!L[0] || L[0].visibility < 0.3) return;
+
+  // Rough phase from knee raise height relative to hip
+  const isRHP = state.isRHP;
+  const knee_r = isRHP ? L[26] : L[25];
+  const hip_r  = isRHP ? L[24] : L[23];
+  const wrist  = isRHP ? L[16] : L[15];
+  const shoulder = isRHP ? L[12] : L[11];
+
+  let phase = 'setup';
+  if (knee_r.visibility > 0.4 && hip_r.visibility > 0.4) {
+    const kneeRaised = (hip_r.y - knee_r.y) > 0.05; // knee above hip in normalized coords
+    const armHigh = shoulder.visibility > 0.4 && wrist.visibility > 0.4 && wrist.y < shoulder.y;
+
+    if (kneeRaised && !armHigh) phase = 'stride';
+    else if (armHigh && angles.elbow && angles.elbow < 110) phase = 'acceleration';
+    else if (armHigh && angles.elbow && angles.elbow > 110) phase = 'release';
+    else if (!kneeRaised && armHigh) phase = 'followthrough';
+    else if (!kneeRaised && !armHigh && angles.hip && angles.hip > 15) phase = 'footplant';
+    else phase = 'windup';
+  }
+
+  setPhase(phase);
+}
+
+// ─── UI UPDATES ──────────────────────────────────────────────────────────────
+function gradeAngle(name, val) {
+  if (val === null) return 'na';
+  const [lo, hi] = BENCH[name];
+  if (val >= lo && val <= hi) return 'good';
+  if (val < lo - 15 || val > hi + 15) return 'bad';
+  return 'warn';
+}
+
+function fmtAngle(val) { return val !== null ? val + '°' : '—'; }
+
+function updateUI(angles) {
+  // Desktop side panel
+  const fields = ['elbow','shoulder','hip','knee','trunk'];
+  const labels = ['sd-elbow','sd-shoulder','sd-hip','sd-knee','sd-trunk'];
+  const bars   = ['bar-elbow','bar-shoulder','bar-hip','bar-knee','bar-trunk'];
+  const keys   = ['elbow','shoulder','hip','knee','trunk'];
+
+  fields.forEach((k, i) => {
+    const el = document.getElementById(labels[i]);
+    const bar = document.getElementById(bars[i]);
+    if (!el) return;
+    const v = angles[k];
+    const grade = gradeAngle(k, v);
+    el.textContent = fmtAngle(v);
+    el.className = 'angle-num' + (grade !== 'na' ? ' ' + grade : '');
+    if (bar && v !== null) {
+      bar.style.width = Math.min(100, (v / 180) * 100) + '%';
+      bar.style.background = grade === 'good' ? 'var(--green)' : grade === 'warn' ? 'var(--yellow)' : 'var(--red)';
+    }
+  });
+
+  // Mobile metric bar
+  const mMap = [['m-elbow','elbow'],['m-hip','hip'],['m-knee','knee'],['m-trunk','trunk']];
+  mMap.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const v = angles[key];
+    const grade = gradeAngle(key, v);
+    el.textContent = v !== null ? v : '—';
+    el.className = 'm-val' + (grade !== 'na' ? ' ' + grade : '');
+  });
+
+  // Show angle badges on video
+  if (state.opts.angles) {
+    showBadge('badge-elbow', 'badge-elbow-val', angles.elbow);
+    showBadge('badge-shoulder', 'badge-shoulder-val', angles.shoulder);
+    showBadge('badge-hip', 'badge-hip-val', angles.hip);
+    showBadge('badge-knee', 'badge-knee-val', angles.knee);
+  }
+}
+
+function showBadge(badgeId, valId, val) {
+  const badge = document.getElementById(badgeId);
+  const valEl = document.getElementById(valId);
+  if (!badge || !valEl) return;
+  if (val !== null) {
+    badge.style.display = 'block';
+    valEl.textContent = val + '°';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function resetMetrics() {
+  ['sd-elbow','sd-shoulder','sd-hip','sd-knee','sd-trunk'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = '—°'; el.className = 'angle-num'; }
+  });
+  ['m-elbow','m-hip','m-knee','m-trunk'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = '—'; el.className = 'm-val'; }
+  });
+  ['badge-elbow','badge-shoulder','badge-hip','badge-knee'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+}
+
+// ─── PHASE MANAGEMENT ────────────────────────────────────────────────────────
+function setPhase(phase) {
+  if (phase === state.currentPhase) return;
+  state.currentPhase = phase;
+
+  // update pills in both mobile and side panel
+  document.querySelectorAll('.phase-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.phase === phase);
+  });
+
+  // Show a cue
+  const cues = CUES[phase] || [];
+  if (cues.length) {
+    const cue = cues[Math.floor(Math.random() * cues.length)];
+    pushCue(phase, cue);
+  }
+}
+
+function pushCue(phase, text) {
+  // update cue list on desktop
+  const list = document.getElementById('cue-list');
+  if (list) {
+    const card = document.createElement('div');
+    card.className = 'cue-card';
+    card.innerHTML = `<div class="cc-phase">${phase.toUpperCase()}</div><div class="cc-text">${text}</div>`;
+    list.prepend(card);
+    while (list.children.length > 4) list.removeChild(list.lastChild);
+  }
+}
+
+function showCue() {
+  const cues = CUES[state.currentPhase] || CUES.setup;
+  const cue = cues[Math.floor(Math.random() * cues.length)];
+  document.getElementById('cue-text').textContent = cue;
+  document.getElementById('cue-panel').classList.add('show');
+  clearTimeout(state.cueTimeout);
+  state.cueTimeout = setTimeout(() => {
+    document.getElementById('cue-panel').classList.remove('show');
+  }, 4000);
+}
+
+// ─── STATUS ──────────────────────────────────────────────────────────────────
+function setStatus(s, text) {
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  dot.className = 'status-dot';
+  if (s === 'active') dot.classList.add('active');
+  if (s === 'loading') dot.classList.add('loading');
+  if (txt) txt.textContent = text;
+}
+
+function clearCanvas() {
+  const c = document.getElementById('canvas');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+}
+
+// ─── CONTROLS ────────────────────────────────────────────────────────────────
+function toggleRecord() {
+  state.recording = !state.recording;
+  document.getElementById('btn-record').classList.toggle('recording', state.recording);
+}
+
+function toggleSettings() {
+  const p = document.getElementById('settings-panel');
+  p.classList.toggle('show');
+}
+
+function toggleHand() {
+  state.isRHP = !state.isRHP;
+  const btn = document.getElementById('toggle-hand');
+  btn.classList.toggle('on', state.isRHP);
+  btn.classList.toggle('off', !state.isRHP);
+  document.getElementById('hand-label').textContent = state.isRHP ? 'RHP' : 'LHP';
+}
+
+function toggleOpt(key) {
+  state.opts[key] = !state.opts[key];
+  const btn = document.getElementById('toggle-' + key);
+  if (btn) { btn.classList.toggle('on', state.opts[key]); btn.classList.toggle('off', !state.opts[key]); }
+  if (key === 'mirror') applyMirror();
+  if (!state.opts.angles) {
+    ['badge-elbow','badge-shoulder','badge-hip','badge-knee'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  }
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  initPose();
+  setStatus('loading', 'Loading AI model...');
+});
+</script>
+</body>
+</html>
