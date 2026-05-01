@@ -616,6 +616,39 @@
   </div>
 </div>
 
+<!-- REPLAY PANEL -->
+<div id="replay-panel" style="display:none;flex-direction:column;background:var(--navy);flex:1;overflow:hidden;">
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--navy-mid);border-bottom:1px solid var(--border);">
+    <span style="font-size:11px;color:var(--orange);letter-spacing:0.1em;text-transform:uppercase;font-weight:700;">⏪ Review Mode</span>
+    <span id="replay-frame-count" style="font-size:11px;color:var(--text-dim);">0 frames</span>
+    <div style="flex:1"></div>
+    <button class="btn sm" onclick="exitReplay()">✕ Back to Live</button>
+  </div>
+  <div style="position:relative;flex:1;background:#000;display:flex;align-items:center;justify-content:center;">
+    <canvas id="replay-canvas" style="max-width:100%;max-height:100%;"></canvas>
+  </div>
+  <!-- scrub bar -->
+  <div style="padding:12px 16px;background:var(--navy-panel);border-top:1px solid var(--border-dim);">
+    <input type="range" id="scrub-bar" min="0" value="0" step="1"
+      style="width:100%;margin-bottom:10px;"
+      oninput="scrubToFrame(parseInt(this.value))">
+    <div style="display:flex;align-items:center;gap:10px;justify-content:center;">
+      <button class="btn sm" onclick="stepFrame(-10)">⏮ -10</button>
+      <button class="btn sm" onclick="stepFrame(-1)">◀ -1</button>
+      <span id="replay-frame-label" style="font-size:13px;color:var(--orange);min-width:80px;text-align:center;">Frame 0</span>
+      <button class="btn sm" onclick="stepFrame(1)">+1 ▶</button>
+      <button class="btn sm" onclick="stepFrame(10)">+10 ⏭</button>
+    </div>
+  </div>
+  <!-- angle readout in replay -->
+  <div id="replay-metrics" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-dim);flex-shrink:0;">
+    <div class="metric-cell"><span class="m-label">Elbow</span><span class="m-val" id="rm-elbow">—</span><span class="m-unit">deg</span></div>
+    <div class="metric-cell"><span class="m-label">Hip Sep</span><span class="m-val" id="rm-hip">—</span><span class="m-unit">deg</span></div>
+    <div class="metric-cell"><span class="m-label">Lead Knee</span><span class="m-val" id="rm-knee">—</span><span class="m-unit">deg</span></div>
+    <div class="metric-cell"><span class="m-label">Phase</span><span class="m-val" id="rm-phase" style="font-size:11px;">—</span><span class="m-unit">detected</span></div>
+  </div>
+</div>
+
 <!-- CONTROLS -->
 <div id="controls">
   <button class="btn" id="btn-flip" onclick="flipCamera()">↩ Flip</button>
@@ -625,6 +658,7 @@
     <div class="dot"></div>
   </button>
   <button class="btn danger" id="btn-stop" onclick="stopCamera()" style="display:none;">■ STOP</button>
+  <button class="btn" id="btn-review" onclick="enterReplay()" style="display:none;">⏪ REVIEW</button>
   <div class="spacer"></div>
   <button class="btn sm" onclick="showCue()">💬 Cue</button>
 </div>
@@ -881,6 +915,7 @@ function onResults(results) {
 
   updateUI(angles);
   detectPhase(results.poseLandmarks, angles);
+  captureFrame(results.poseLandmarks, angles, state.currentPhase);
 }
 
 // ─── SKELETON DRAWING ─────────────────────────────────────────────────────────
@@ -895,33 +930,92 @@ const CONNECTIONS = [
   [24,26],[26,28],[28,30],[28,32],
   // left leg
   [23,25],[25,27],[27,29],[27,31],
-  // face
-  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
 ];
 
-function px(lm, w, h) { return { x: lm.x * w, y: lm.y * h, z: lm.z, v: lm.visibility }; }
+// Scale landmarks to fill frame — pad 5% top and bottom
+function scaledPx(lm, w, h, minY, maxY, minX, maxX) {
+  const pad = 0.05;
+  const rangeY = maxY - minY || 1;
+  const rangeX = maxX - minX || 1;
+  const scale = Math.min(
+    (1 - pad * 2) / rangeX,
+    (1 - pad * 2) / rangeY
+  );
+  const cx = 0.5, cy = 0.5;
+  const sx = cx + (lm.x - (minX + maxX) / 2) * scale;
+  const sy = cy + (lm.y - (minY + maxY) / 2) * scale;
+  return { x: sx * w, y: sy * h };
+}
+
+function getBodyBounds(lms) {
+  // Use body landmarks only (ignore face noise at top)
+  const bodyIdx = [11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32];
+  let minY = 1, maxY = 0, minX = 1, maxX = 0;
+  for (const i of bodyIdx) {
+    const lm = lms[i];
+    if (!lm || lm.visibility < 0.3) continue;
+    if (lm.y < minY) minY = lm.y;
+    if (lm.y > maxY) maxY = lm.y;
+    if (lm.x < minX) minX = lm.x;
+    if (lm.x > maxX) maxX = lm.x;
+  }
+  // Extend top for head
+  minY = Math.max(0, minY - (maxY - minY) * 0.22);
+  return { minY, maxY, minX, maxX };
+}
 
 function drawSkeleton(ctx, lms, w, h) {
+  const bounds = getBodyBounds(lms);
+  const sp = (lm) => scaledPx(lm, w, h, bounds.minY, bounds.maxY, bounds.minX, bounds.maxX);
+
   // connections
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 3;
   for (const [a, b] of CONNECTIONS) {
     const la = lms[a], lb = lms[b];
-    if (la.visibility < 0.4 || lb.visibility < 0.4) continue;
-    const pa = px(la, w, h), pb = px(lb, w, h);
+    if (!la || !lb || la.visibility < 0.35 || lb.visibility < 0.35) continue;
+    const pa = sp(la), pb = sp(lb);
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(249,115,22,0.7)';
+    ctx.strokeStyle = 'rgba(249,115,22,0.85)';
+    ctx.lineWidth = 3;
     ctx.moveTo(pa.x, pa.y);
     ctx.lineTo(pb.x, pb.y);
     ctx.stroke();
   }
-  // joints
-  for (let i = 0; i < lms.length; i++) {
+
+  // joints — skip face points (0-10)
+  for (let i = 11; i < lms.length; i++) {
     const lm = lms[i];
-    if (lm.visibility < 0.4) continue;
-    const p = px(lm, w, h);
+    if (!lm || lm.visibility < 0.35) continue;
+    const p = sp(lm);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-    ctx.fillStyle = i === 16 || i === 15 ? '#14b8a6' : 'rgba(249,115,22,0.9)';
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    // wrists = teal, hips = yellow, everything else = orange
+    if (i === 15 || i === 16) ctx.fillStyle = '#14b8a6';
+    else if (i === 23 || i === 24) ctx.fillStyle = '#eab308';
+    else ctx.fillStyle = 'rgba(249,115,22,0.95)';
+    ctx.fill();
+  }
+
+  // HEAD — draw oval between nose and shoulders
+  const nose = lms[0];
+  const lShoulder = lms[11];
+  const rShoulder = lms[12];
+  if (nose && lShoulder && rShoulder &&
+      nose.visibility > 0.3 && lShoulder.visibility > 0.3 && rShoulder.visibility > 0.3) {
+    const noseP = sp(nose);
+    const lsP   = sp(lShoulder);
+    const rsP   = sp(rShoulder);
+    const shoulderWidth = Math.abs(rsP.x - lsP.x);
+    const headW = shoulderWidth * 0.55;
+    const headH = headW * 1.25;
+    const headCX = (lsP.x + rsP.x) / 2;
+    const headCY = noseP.y - headH * 0.1;
+    ctx.beginPath();
+    ctx.ellipse(headCX, headCY, headW / 2, headH / 2, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(249,115,22,0.85)';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(249,115,22,0.12)';
     ctx.fill();
   }
 }
@@ -1151,10 +1245,123 @@ function clearCanvas() {
 }
 
 // ─── CONTROLS ────────────────────────────────────────────────────────────────
+// ─── RECORDING & REPLAY ──────────────────────────────────────────────────────
+const recordedFrames = []; // { imageData, landmarks, angles, phase }
+let replayIndex = 0;
+
 function toggleRecord() {
+  if (!state.cameraActive) return;
   state.recording = !state.recording;
-  document.getElementById('btn-record').classList.toggle('recording', state.recording);
+  const btn = document.getElementById('btn-record');
+  btn.classList.toggle('recording', state.recording);
+
+  if (state.recording) {
+    recordedFrames.length = 0; // clear previous
+    document.getElementById('btn-review').style.display = 'none';
+  } else {
+    // stopped recording
+    if (recordedFrames.length > 0) {
+      document.getElementById('btn-review').style.display = '';
+    }
+  }
 }
+
+function captureFrame(landmarks, angles, phase) {
+  if (!state.recording) return;
+  const video = document.getElementById('video');
+  const offscreen = document.createElement('canvas');
+  offscreen.width = video.videoWidth || 640;
+  offscreen.height = video.videoHeight || 480;
+  const ctx = offscreen.getContext('2d');
+
+  // draw video frame (handle mirror)
+  if (state.facingMode === 'user' && state.opts.mirror) {
+    ctx.translate(offscreen.width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
+  if (state.facingMode === 'user' && state.opts.mirror) {
+    ctx.setTransform(1,0,0,1,0,0);
+  }
+
+  // draw skeleton on top
+  if (state.opts.skeleton && landmarks) {
+    drawSkeleton(ctx, landmarks, offscreen.width, offscreen.height);
+  }
+
+  recordedFrames.push({
+    dataURL: offscreen.toDataURL('image/jpeg', 0.7),
+    angles: { ...angles },
+    phase,
+  });
+
+  // cap at 300 frames (~10 seconds at 30fps)
+  if (recordedFrames.length > 300) recordedFrames.shift();
+}
+
+function enterReplay() {
+  if (recordedFrames.length === 0) return;
+  document.getElementById('main').style.display = 'none';
+  document.getElementById('phase-bar').style.display = 'none';
+  document.getElementById('metrics-bar').style.display = 'none';
+  document.getElementById('controls').style.display = 'none';
+  document.getElementById('replay-panel').style.display = 'flex';
+  document.getElementById('replay-panel').style.flexDirection = 'column';
+
+  const scrub = document.getElementById('scrub-bar');
+  scrub.max = recordedFrames.length - 1;
+  scrub.value = 0;
+  document.getElementById('replay-frame-count').textContent = recordedFrames.length + ' frames captured';
+  replayIndex = 0;
+  renderReplayFrame(0);
+}
+
+function exitReplay() {
+  document.getElementById('replay-panel').style.display = 'none';
+  document.getElementById('main').style.display = 'flex';
+  document.getElementById('phase-bar').style.display = 'flex';
+  document.getElementById('metrics-bar').style.display = 'grid';
+  document.getElementById('controls').style.display = 'flex';
+}
+
+function renderReplayFrame(idx) {
+  if (idx < 0 || idx >= recordedFrames.length) return;
+  replayIndex = idx;
+  const frame = recordedFrames[idx];
+  const canvas = document.getElementById('replay-canvas');
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+  };
+  img.src = frame.dataURL;
+
+  document.getElementById('replay-frame-label').textContent = `Frame ${idx + 1} / ${recordedFrames.length}`;
+  document.getElementById('scrub-bar').value = idx;
+
+  // update replay metrics
+  const a = frame.angles;
+  const grade = (key, val) => {
+    if (val === null) return '';
+    const [lo, hi] = BENCH[key];
+    return val >= lo && val <= hi ? 'good' : val < lo-15 || val > hi+15 ? 'bad' : 'warn';
+  };
+  ['elbow','hip','knee'].forEach((key, i) => {
+    const ids = ['rm-elbow','rm-hip','rm-knee'];
+    const el = document.getElementById(ids[i]);
+    if (!el) return;
+    const v = a[key];
+    el.textContent = v !== null ? v : '—';
+    el.className = 'm-val ' + grade(key, v);
+  });
+  const phaseEl = document.getElementById('rm-phase');
+  if (phaseEl) phaseEl.textContent = frame.phase || '—';
+}
+
+function scrubToFrame(idx) { renderReplayFrame(idx); }
+function stepFrame(delta) { renderReplayFrame(Math.max(0, Math.min(recordedFrames.length - 1, replayIndex + delta))); }
 
 function toggleSettings() {
   const p = document.getElementById('settings-panel');
