@@ -915,7 +915,7 @@ function onResults(results) {
 
   updateUI(angles);
   detectPhase(results.poseLandmarks, angles);
-  captureFrame(results.poseLandmarks, angles, state.currentPhase);
+  buildFrame(results.poseLandmarks, angles, state.currentPhase);
 }
 
 // ─── SKELETON DRAWING ─────────────────────────────────────────────────────────
@@ -934,17 +934,19 @@ const CONNECTIONS = [
 
 // Scale landmarks to fill frame — pad 5% top and bottom
 function scaledPx(lm, w, h, minY, maxY, minX, maxX) {
-  const pad = 0.05;
-  const rangeY = maxY - minY || 1;
-  const rangeX = maxX - minX || 1;
-  const scale = Math.min(
-    (1 - pad * 2) / rangeX,
-    (1 - pad * 2) / rangeY
-  );
-  const cx = 0.5, cy = 0.5;
-  const sx = cx + (lm.x - (minX + maxX) / 2) * scale;
-  const sy = cy + (lm.y - (minY + maxY) / 2) * scale;
-  return { x: sx * w, y: sy * h };
+  const padX = 0.12, padY = 0.06;
+  const rangeY = (maxY - minY) || 1;
+  const rangeX = (maxX - minX) || 1;
+  // uniform scale — preserve aspect ratio of skeleton
+  const scaleY = (1 - padY * 2) / rangeY;
+  const scaleX = (1 - padX * 2) / rangeX;
+  const scale  = Math.min(scaleX, scaleY);
+  const midX   = (minX + maxX) / 2;
+  const midY   = (minY + maxY) / 2;
+  return {
+    x: (0.5 + (lm.x - midX) * scale) * w,
+    y: (0.5 + (lm.y - midY) * scale) * h,
+  };
 }
 
 function getBodyBounds(lms) {
@@ -1244,10 +1246,54 @@ function clearCanvas() {
   ctx.clearRect(0, 0, c.width, c.height);
 }
 
-// ─── CONTROLS ────────────────────────────────────────────────────────────────
 // ─── RECORDING & REPLAY ──────────────────────────────────────────────────────
-const recordedFrames = []; // { imageData, landmarks, angles, phase }
+// Dashcam ring buffer — always keeps last ~4 seconds (~120 frames at 30fps)
+const BUFFER_MAX = 120;
+const SAVED_MAX  = 300;
+const ringBuffer = [];   // always-on circular buffer
+const savedFrames = [];  // locked clip when user saves
 let replayIndex = 0;
+let replayFrames = [];   // what's currently being reviewed
+
+function buildFrame(landmarks, angles, phase) {
+  // Always capture into ring buffer (dashcam style)
+  const video = document.getElementById('video');
+  if (!video || video.readyState < 2) return;
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = video.videoWidth  || 640;
+  offscreen.height = video.videoHeight || 480;
+  const ctx = offscreen.getContext('2d');
+
+  const shouldMirrorFrame = state.facingMode === 'user' && state.opts.mirror;
+  if (shouldMirrorFrame) {
+    ctx.save();
+    ctx.translate(offscreen.width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
+  if (shouldMirrorFrame) ctx.restore();
+
+  if (state.opts.skeleton && landmarks) {
+    drawSkeleton(ctx, landmarks, offscreen.width, offscreen.height);
+  }
+
+  const frame = {
+    dataURL: offscreen.toDataURL('image/jpeg', 0.65),
+    angles: angles ? { ...angles } : {},
+    phase: phase || 'unknown',
+  };
+
+  // ring buffer — always rolling
+  ringBuffer.push(frame);
+  if (ringBuffer.length > BUFFER_MAX) ringBuffer.shift();
+
+  // if user is actively recording, also push to savedFrames
+  if (state.recording) {
+    savedFrames.push(frame);
+    if (savedFrames.length > SAVED_MAX) savedFrames.shift();
+  }
+}
 
 function toggleRecord() {
   if (!state.cameraActive) return;
@@ -1256,112 +1302,105 @@ function toggleRecord() {
   btn.classList.toggle('recording', state.recording);
 
   if (state.recording) {
-    recordedFrames.length = 0; // clear previous
-    document.getElementById('btn-review').style.display = 'none';
+    // Start recording — seed with last 3.5 seconds from ring buffer
+    savedFrames.length = 0;
+    const seed = ringBuffer.slice(-Math.floor(BUFFER_MAX * 0.875));
+    savedFrames.push(...seed);
+    setStatus('active', '● REC — ' + savedFrames.length + ' pre-frames loaded');
   } else {
-    // stopped recording
-    if (recordedFrames.length > 0) {
+    // Stopped recording
+    setStatus('active', savedFrames.length + ' frames saved');
+    if (savedFrames.length > 0) {
       document.getElementById('btn-review').style.display = '';
     }
   }
 }
 
-function captureFrame(landmarks, angles, phase) {
-  if (!state.recording) return;
-  const video = document.getElementById('video');
-  const offscreen = document.createElement('canvas');
-  offscreen.width = video.videoWidth || 640;
-  offscreen.height = video.videoHeight || 480;
-  const ctx = offscreen.getContext('2d');
-
-  // draw video frame (handle mirror)
-  if (state.facingMode === 'user' && state.opts.mirror) {
-    ctx.translate(offscreen.width, 0);
-    ctx.scale(-1, 1);
-  }
-  ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-  if (state.facingMode === 'user' && state.opts.mirror) {
-    ctx.setTransform(1,0,0,1,0,0);
-  }
-
-  // draw skeleton on top
-  if (state.opts.skeleton && landmarks) {
-    drawSkeleton(ctx, landmarks, offscreen.width, offscreen.height);
-  }
-
-  recordedFrames.push({
-    dataURL: offscreen.toDataURL('image/jpeg', 0.7),
-    angles: { ...angles },
-    phase,
-  });
-
-  // cap at 300 frames (~10 seconds at 30fps)
-  if (recordedFrames.length > 300) recordedFrames.shift();
-}
-
 function enterReplay() {
-  if (recordedFrames.length === 0) return;
-  document.getElementById('main').style.display = 'none';
-  document.getElementById('phase-bar').style.display = 'none';
-  document.getElementById('metrics-bar').style.display = 'none';
-  document.getElementById('controls').style.display = 'none';
-  document.getElementById('replay-panel').style.display = 'flex';
-  document.getElementById('replay-panel').style.flexDirection = 'column';
+  replayFrames = savedFrames.slice(); // copy
+  if (replayFrames.length === 0) {
+    alert('No frames recorded. Hit record during a pitch first.');
+    return;
+  }
+
+  // Hide live view, show replay
+  document.getElementById('main').style.display         = 'none';
+  document.getElementById('phase-bar').style.display    = 'none';
+  document.getElementById('metrics-bar').style.display  = 'none';
+  document.getElementById('controls').style.display     = 'none';
+  const rp = document.getElementById('replay-panel');
+  rp.style.display        = 'flex';
+  rp.style.flexDirection  = 'column';
+  rp.style.position       = 'fixed';
+  rp.style.inset          = '0';
+  rp.style.zIndex         = '100';
 
   const scrub = document.getElementById('scrub-bar');
-  scrub.max = recordedFrames.length - 1;
+  scrub.min   = 0;
+  scrub.max   = replayFrames.length - 1;
   scrub.value = 0;
-  document.getElementById('replay-frame-count').textContent = recordedFrames.length + ' frames captured';
+
+  document.getElementById('replay-frame-count').textContent =
+    replayFrames.length + ' frames  (' + (replayFrames.length / 30).toFixed(1) + 's)';
+
   replayIndex = 0;
   renderReplayFrame(0);
 }
 
 function exitReplay() {
-  document.getElementById('replay-panel').style.display = 'none';
-  document.getElementById('main').style.display = 'flex';
-  document.getElementById('phase-bar').style.display = 'flex';
+  const rp = document.getElementById('replay-panel');
+  rp.style.display  = 'none';
+  rp.style.position = '';
+  rp.style.inset    = '';
+  rp.style.zIndex   = '';
+
+  document.getElementById('main').style.display        = 'flex';
+  document.getElementById('phase-bar').style.display   = 'flex';
   document.getElementById('metrics-bar').style.display = 'grid';
-  document.getElementById('controls').style.display = 'flex';
+  document.getElementById('controls').style.display    = 'flex';
 }
 
 function renderReplayFrame(idx) {
-  if (idx < 0 || idx >= recordedFrames.length) return;
+  if (idx < 0 || idx >= replayFrames.length) return;
   replayIndex = idx;
-  const frame = recordedFrames[idx];
+  const frame = replayFrames[idx];
+
   const canvas = document.getElementById('replay-canvas');
-  const img = new Image();
+  const img    = new Image();
   img.onload = () => {
-    canvas.width = img.width;
+    canvas.width  = img.width;
     canvas.height = img.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
+    canvas.getContext('2d').drawImage(img, 0, 0);
   };
   img.src = frame.dataURL;
 
-  document.getElementById('replay-frame-label').textContent = `Frame ${idx + 1} / ${recordedFrames.length}`;
+  document.getElementById('replay-frame-label').textContent =
+    'Frame ' + (idx + 1) + ' / ' + replayFrames.length;
   document.getElementById('scrub-bar').value = idx;
 
-  // update replay metrics
-  const a = frame.angles;
+  // metrics
+  const a = frame.angles || {};
   const grade = (key, val) => {
-    if (val === null) return '';
-    const [lo, hi] = BENCH[key];
-    return val >= lo && val <= hi ? 'good' : val < lo-15 || val > hi+15 ? 'bad' : 'warn';
+    if (val == null) return '';
+    const b = BENCH[key];
+    if (!b) return '';
+    return val >= b[0] && val <= b[1] ? 'good' : (val < b[0]-15 || val > b[1]+15) ? 'bad' : 'warn';
   };
-  ['elbow','hip','knee'].forEach((key, i) => {
-    const ids = ['rm-elbow','rm-hip','rm-knee'];
-    const el = document.getElementById(ids[i]);
+  [['rm-elbow','elbow'],['rm-hip','hip'],['rm-knee','knee']].forEach(([id, key]) => {
+    const el = document.getElementById(id);
     if (!el) return;
     const v = a[key];
-    el.textContent = v !== null ? v : '—';
-    el.className = 'm-val ' + grade(key, v);
+    el.textContent  = v != null ? v : '—';
+    el.className    = 'm-val ' + grade(key, v);
   });
-  const phaseEl = document.getElementById('rm-phase');
-  if (phaseEl) phaseEl.textContent = frame.phase || '—';
+  const phEl = document.getElementById('rm-phase');
+  if (phEl) { phEl.textContent = frame.phase || '—'; phEl.className = 'm-val'; }
 }
 
-function scrubToFrame(idx) { renderReplayFrame(idx); }
-function stepFrame(delta) { renderReplayFrame(Math.max(0, Math.min(recordedFrames.length - 1, replayIndex + delta))); }
+function scrubToFrame(idx) { renderReplayFrame(parseInt(idx)); }
+function stepFrame(delta) {
+  renderReplayFrame(Math.max(0, Math.min(replayFrames.length - 1, replayIndex + delta)));
+}
 
 function toggleSettings() {
   const p = document.getElementById('settings-panel');
