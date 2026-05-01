@@ -751,6 +751,7 @@ const state = {
   stream: null,
   poseReady: false,
   cueTimeout: null,
+  inReplay: false,
 };
 
 // ─── COACHING CUES (Weinstein/Strom vocabulary) ───────────────────────────────
@@ -883,7 +884,7 @@ function runPose() {
   const video = document.getElementById('video');
   if (!state.cameraActive) return;
   async function frame() {
-    if (!state.cameraActive) return;
+    if (!state.cameraActive || state.inReplay) return;
     if (video.readyState >= 2) {
       try { await pose.send({ image: video }); } catch(e) {}
     }
@@ -925,105 +926,66 @@ function onResults(results) {
 
 // ─── SKELETON DRAWING ─────────────────────────────────────────────────────────
 const CONNECTIONS = [
-  // torso
-  [11,12],[11,23],[12,24],[23,24],
-  // right arm
-  [12,14],[14,16],[16,18],[16,20],
-  // left arm
-  [11,13],[13,15],[15,17],[15,19],
-  // right leg
-  [24,26],[26,28],[28,30],[28,32],
-  // left leg
-  [23,25],[25,27],[27,29],[27,31],
+  [11,12],[11,23],[12,24],[23,24],   // torso
+  [12,14],[14,16],                    // right arm
+  [11,13],[13,15],                    // left arm
+  [24,26],[26,28],[28,30],[28,32],   // right leg
+  [23,25],[25,27],[27,29],[27,31],   // left leg
 ];
 
-// Scale landmarks — follow the person, expand to fill frame
-function scaledPx(lm, w, h, minY, maxY, minX, maxX) {
-  // Add padding so joints aren't at edge
-  const pad = 0.08;
-  const rangeY = (maxY - minY) || 1;
-  const rangeX = (maxX - minX) || 1;
-  // Scale each axis independently to fill the frame
-  const scaleX = (1 - pad * 2) / rangeX;
-  const scaleY = (1 - pad * 2) / rangeY;
-  return {
-    x: (pad + (lm.x - minX) * scaleX) * w,
-    y: (pad + (lm.y - minY) * scaleY) * h,
-  };
-}
-
-function getBodyBounds(lms) {
-  // Use body landmarks only (ignore face noise at top)
-  const bodyIdx = [11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32];
-  let minY = 1, maxY = 0, minX = 1, maxX = 0;
-  for (const i of bodyIdx) {
-    const lm = lms[i];
-    if (!lm || lm.visibility < 0.3) continue;
-    if (lm.y < minY) minY = lm.y;
-    if (lm.y > maxY) maxY = lm.y;
-    if (lm.x < minX) minX = lm.x;
-    if (lm.x > maxX) maxX = lm.x;
-  }
-  // Extend top for head
-  minY = Math.max(0, minY - (maxY - minY) * 0.22);
-  return { minY, maxY, minX, maxX };
+// Direct pixel mapping — no scaling, skeleton matches person exactly
+function lmPx(lm, w, h) {
+  return { x: lm.x * w, y: lm.y * h };
 }
 
 function drawSkeleton(ctx, lms, w, h) {
-  const bounds = getBodyBounds(lms);
-  const sp = (lm) => scaledPx(lm, w, h, bounds.minY, bounds.maxY, bounds.minX, bounds.maxX);
-
-  // connections
-  ctx.lineWidth = 3;
+  // Draw connections
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = 'rgba(249,115,22,0.9)';
   for (const [a, b] of CONNECTIONS) {
     const la = lms[a], lb = lms[b];
-    if (!la || !lb || la.visibility < 0.35 || lb.visibility < 0.35) continue;
-    const pa = sp(la), pb = sp(lb);
+    if (!la || !lb || la.visibility < 0.4 || lb.visibility < 0.4) continue;
+    const pa = lmPx(la, w, h), pb = lmPx(lb, w, h);
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(249,115,22,0.85)';
-    ctx.lineWidth = 3;
     ctx.moveTo(pa.x, pa.y);
     ctx.lineTo(pb.x, pb.y);
     ctx.stroke();
   }
 
-  // joints — skip face points (0-10)
+  // Draw joints (skip face landmarks 0-10)
   for (let i = 11; i < lms.length; i++) {
     const lm = lms[i];
-    if (!lm || lm.visibility < 0.35) continue;
-    const p = sp(lm);
+    if (!lm || lm.visibility < 0.4) continue;
+    const p = lmPx(lm, w, h);
     ctx.beginPath();
     ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-    // wrists = teal, hips = yellow, everything else = orange
-    if (i === 15 || i === 16) ctx.fillStyle = '#14b8a6';
-    else if (i === 23 || i === 24) ctx.fillStyle = '#eab308';
-    else ctx.fillStyle = 'rgba(249,115,22,0.95)';
+    if (i === 15 || i === 16)       ctx.fillStyle = '#14b8a6'; // wrists = teal
+    else if (i === 23 || i === 24)  ctx.fillStyle = '#eab308'; // hips = yellow
+    else                             ctx.fillStyle = 'rgba(249,115,22,0.95)';
     ctx.fill();
   }
 
-  // HEAD — draw oval between nose and shoulders
-  const nose = lms[0];
-  const lShoulder = lms[11];
-  const rShoulder = lms[12];
-  if (nose && lShoulder && rShoulder &&
-      nose.visibility > 0.3 && lShoulder.visibility > 0.3 && rShoulder.visibility > 0.3) {
-    const noseP = sp(nose);
-    const lsP   = sp(lShoulder);
-    const rsP   = sp(rShoulder);
-    const shoulderWidth = Math.abs(rsP.x - lsP.x);
-    const headW = shoulderWidth * 0.55;
-    const headH = headW * 1.25;
-    const headCX = (lsP.x + rsP.x) / 2;
-    const headCY = noseP.y - headH * 0.1;
+  // HEAD — oval centered on nose, sized from shoulder width
+  const nose = lms[0], ls = lms[11], rs = lms[12];
+  if (nose && ls && rs && nose.visibility > 0.3 && ls.visibility > 0.4 && rs.visibility > 0.4) {
+    const np = lmPx(nose, w, h);
+    const lp = lmPx(ls, w, h);
+    const rp = lmPx(rs, w, h);
+    const shoulderW = Math.abs(rp.x - lp.x);
+    const headW = shoulderW * 0.42;
+    const headH = headW * 1.3;
+    const cx = (lp.x + rp.x) / 2;
+    const cy = np.y;
     ctx.beginPath();
-    ctx.ellipse(headCX, headCY, headW / 2, headH / 2, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, cy, headW / 2, headH / 2, 0, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(249,115,22,0.85)';
     ctx.lineWidth = 2.5;
     ctx.stroke();
-    ctx.fillStyle = 'rgba(249,115,22,0.12)';
+    ctx.fillStyle = 'rgba(249,115,22,0.1)';
     ctx.fill();
   }
 }
+
 
 // ─── ANGLE MATH ──────────────────────────────────────────────────────────────
 function angleBetween(a, b, c) {
@@ -1250,8 +1212,8 @@ function clearCanvas() {
 }
 
 // ─── RECORDING & REPLAY ──────────────────────────────────────────────────────
-// Always-on dashcam ring buffer — last ~4 seconds at ~30fps
-const BUFFER_MAX = 120;
+// Always-on dashcam ring buffer — last ~3.5 seconds at ~30fps
+const BUFFER_MAX = 105;
 const ringBuffer = [];
 let replayFrames = [];
 let replayIndex  = 0;
@@ -1284,6 +1246,7 @@ function doCapture() {
     return;
   }
   replayFrames = ringBuffer.slice();
+  state.inReplay = true; // pause pose loop
   enterReplay();
 }
 
@@ -1309,6 +1272,9 @@ function exitReplay() {
   document.getElementById('metrics-bar').style.display  = 'grid';
   document.getElementById('controls').style.display     = 'flex';
   setStatus('active', '● Pre-rolling...');
+  state.inReplay = false;
+  // Restart pose loop
+  if (state.cameraActive) runPose();
 }
 
 function renderReplayFrame(idx) {
