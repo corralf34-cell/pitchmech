@@ -617,31 +617,37 @@
 </div>
 
 <!-- REPLAY PANEL -->
-<div id="replay-panel" style="display:none;flex-direction:column;background:var(--navy);flex:1;overflow:hidden;">
-  <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--navy-mid);border-bottom:1px solid var(--border);">
-    <span style="font-size:11px;color:var(--orange);letter-spacing:0.1em;text-transform:uppercase;font-weight:700;">⏪ Review Mode</span>
-    <span id="replay-frame-count" style="font-size:11px;color:var(--text-dim);">0 frames</span>
+<div id="replay-panel" style="display:none;flex-direction:column;background:var(--navy);position:fixed;inset:0;z-index:100;">
+  <!-- replay header -->
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--navy-mid);border-bottom:1px solid var(--border);flex-shrink:0;">
+    <span style="font-size:11px;color:var(--orange);letter-spacing:0.1em;text-transform:uppercase;font-weight:700;">⏪ Capture Review</span>
+    <span id="replay-frame-count" style="font-size:11px;color:var(--text-dim);"></span>
     <div style="flex:1"></div>
-    <button class="btn sm" onclick="exitReplay()">✕ Back to Live</button>
+    <button class="btn sm" onclick="exitReplay()">▶ Back to Live</button>
   </div>
-  <div style="position:relative;flex:1;background:#000;display:flex;align-items:center;justify-content:center;">
-    <canvas id="replay-canvas" style="max-width:100%;max-height:100%;"></canvas>
+  <!-- replay video area -->
+  <div style="flex:1;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;">
+    <canvas id="replay-canvas" style="max-width:100%;max-height:100%;display:block;"></canvas>
+    <!-- frame label overlay -->
+    <div style="position:absolute;bottom:8px;right:10px;background:rgba(10,15,30,0.7);padding:4px 10px;border-radius:6px;font-size:12px;color:var(--orange);" id="replay-frame-label">Frame 1</div>
   </div>
   <!-- scrub bar -->
-  <div style="padding:12px 16px;background:var(--navy-panel);border-top:1px solid var(--border-dim);">
+  <div style="padding:10px 16px 6px;background:var(--navy-panel);border-top:1px solid var(--border-dim);flex-shrink:0;">
     <input type="range" id="scrub-bar" min="0" value="0" step="1"
-      style="width:100%;margin-bottom:10px;"
+      style="width:100%;accent-color:var(--orange);height:6px;cursor:pointer;"
       oninput="scrubToFrame(parseInt(this.value))">
-    <div style="display:flex;align-items:center;gap:10px;justify-content:center;">
-      <button class="btn sm" onclick="stepFrame(-10)">⏮ -10</button>
-      <button class="btn sm" onclick="stepFrame(-1)">◀ -1</button>
-      <span id="replay-frame-label" style="font-size:13px;color:var(--orange);min-width:80px;text-align:center;">Frame 0</span>
-      <button class="btn sm" onclick="stepFrame(1)">+1 ▶</button>
-      <button class="btn sm" onclick="stepFrame(10)">+10 ⏭</button>
-    </div>
   </div>
-  <!-- angle readout in replay -->
-  <div id="replay-metrics" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-dim);flex-shrink:0;">
+  <!-- step buttons -->
+  <div style="display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--navy-panel);flex-shrink:0;">
+    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(-30)">⏮ Start</button>
+    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(-10)">« -10</button>
+    <button class="btn primary" style="flex:1;justify-content:center;" onclick="stepFrame(-1)">◀ -1</button>
+    <button class="btn primary" style="flex:1;justify-content:center;" onclick="stepFrame(1)">+1 ▶</button>
+    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(10)">+10 »</button>
+    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(999)">End ⏭</button>
+  </div>
+  <!-- angle readouts -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-dim);flex-shrink:0;">
     <div class="metric-cell"><span class="m-label">Elbow</span><span class="m-val" id="rm-elbow">—</span><span class="m-unit">deg</span></div>
     <div class="metric-cell"><span class="m-label">Hip Sep</span><span class="m-val" id="rm-hip">—</span><span class="m-unit">deg</span></div>
     <div class="metric-cell"><span class="m-label">Lead Knee</span><span class="m-val" id="rm-knee">—</span><span class="m-unit">deg</span></div>
@@ -649,18 +655,18 @@
   </div>
 </div>
 
-<!-- CONTROLS -->
+<!-- CONTROLS — simplified: LIVE | [●] CAPTURE | CUE -->
 <div id="controls">
   <button class="btn" id="btn-flip" onclick="flipCamera()">↩ Flip</button>
   <div class="spacer"></div>
   <button class="btn primary" id="btn-live" onclick="startCamera()">▶ LIVE</button>
-  <button id="btn-record" onclick="toggleRecord()" title="Record">
-    <div class="dot"></div>
+  <button class="btn" id="btn-capture" onclick="doCapture()"
+    style="display:none;background:rgba(249,115,22,0.15);border-color:var(--orange);font-size:13px;padding:9px 20px;">
+    ● CAPTURE
   </button>
-  <button class="btn danger" id="btn-stop" onclick="stopCamera()" style="display:none;">■ STOP</button>
-  <button class="btn" id="btn-review" onclick="enterReplay()" style="display:none;">⏪ REVIEW</button>
   <div class="spacer"></div>
   <button class="btn sm" onclick="showCue()">💬 Cue</button>
+  <button class="btn sm" onclick="toggleSettings()">⚙</button>
 </div>
 
 <!-- SETTINGS PANEL -->
@@ -824,9 +830,9 @@ async function startCamera() {
 
     document.getElementById('idle-overlay').style.display = 'none';
     document.getElementById('btn-live').style.display = 'none';
-    document.getElementById('btn-stop').style.display = '';
+    document.getElementById('btn-capture').style.display = '';
     applyMirror();
-    setStatus('active', 'Tracking...');
+    setStatus('active', '● Pre-rolling...');
     runPose();
   } catch(e) {
     setStatus('off', 'Camera denied');
@@ -844,8 +850,7 @@ function stopCamera() {
   document.getElementById('video').srcObject = null;
   document.getElementById('idle-overlay').style.display = '';
   document.getElementById('btn-live').style.display = '';
-  document.getElementById('btn-stop').style.display = 'none';
-  document.getElementById('btn-record').classList.remove('recording');
+  document.getElementById('btn-capture').style.display = 'none';
   clearCanvas();
   setStatus('off', 'Stopped');
   resetMetrics();
@@ -932,20 +937,18 @@ const CONNECTIONS = [
   [23,25],[25,27],[27,29],[27,31],
 ];
 
-// Scale landmarks to fill frame — pad 5% top and bottom
+// Scale landmarks — follow the person, expand to fill frame
 function scaledPx(lm, w, h, minY, maxY, minX, maxX) {
-  const padX = 0.12, padY = 0.06;
+  // Add padding so joints aren't at edge
+  const pad = 0.08;
   const rangeY = (maxY - minY) || 1;
   const rangeX = (maxX - minX) || 1;
-  // uniform scale — preserve aspect ratio of skeleton
-  const scaleY = (1 - padY * 2) / rangeY;
-  const scaleX = (1 - padX * 2) / rangeX;
-  const scale  = Math.min(scaleX, scaleY);
-  const midX   = (minX + maxX) / 2;
-  const midY   = (minY + maxY) / 2;
+  // Scale each axis independently to fill the frame
+  const scaleX = (1 - pad * 2) / rangeX;
+  const scaleY = (1 - pad * 2) / rangeY;
   return {
-    x: (0.5 + (lm.x - midX) * scale) * w,
-    y: (0.5 + (lm.y - midY) * scale) * h,
+    x: (pad + (lm.x - minX) * scaleX) * w,
+    y: (pad + (lm.y - minY) * scaleY) * h,
   };
 }
 
@@ -1247,160 +1250,99 @@ function clearCanvas() {
 }
 
 // ─── RECORDING & REPLAY ──────────────────────────────────────────────────────
-// Dashcam ring buffer — always keeps last ~4 seconds (~120 frames at 30fps)
+// Always-on dashcam ring buffer — last ~4 seconds at ~30fps
 const BUFFER_MAX = 120;
-const SAVED_MAX  = 300;
-const ringBuffer = [];   // always-on circular buffer
-const savedFrames = [];  // locked clip when user saves
-let replayIndex = 0;
-let replayFrames = [];   // what's currently being reviewed
+const ringBuffer = [];
+let replayFrames = [];
+let replayIndex  = 0;
 
+// Called every pose result — always fills ring buffer
 function buildFrame(landmarks, angles, phase) {
-  // Always capture into ring buffer (dashcam style)
   const video = document.getElementById('video');
   if (!video || video.readyState < 2) return;
-
-  const offscreen = document.createElement('canvas');
-  offscreen.width  = video.videoWidth  || 640;
-  offscreen.height = video.videoHeight || 480;
-  const ctx = offscreen.getContext('2d');
-
-  const shouldMirrorFrame = state.facingMode === 'user' && state.opts.mirror;
-  if (shouldMirrorFrame) {
-    ctx.save();
-    ctx.translate(offscreen.width, 0);
-    ctx.scale(-1, 1);
-  }
-  ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-  if (shouldMirrorFrame) ctx.restore();
-
-  if (state.opts.skeleton && landmarks) {
-    drawSkeleton(ctx, landmarks, offscreen.width, offscreen.height);
-  }
-
-  const frame = {
-    dataURL: offscreen.toDataURL('image/jpeg', 0.65),
-    angles: angles ? { ...angles } : {},
-    phase: phase || 'unknown',
-  };
-
-  // ring buffer — always rolling
-  ringBuffer.push(frame);
+  const w = video.videoWidth || 640, h = video.videoHeight || 480;
+  const off = document.createElement('canvas');
+  off.width = w; off.height = h;
+  const ctx = off.getContext('2d');
+  const mir = state.facingMode === 'user' && state.opts.mirror;
+  if (mir) { ctx.save(); ctx.translate(w, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, w, h);
+  if (mir) ctx.restore();
+  if (state.opts.skeleton && landmarks) drawSkeleton(ctx, landmarks, w, h);
+  ringBuffer.push({
+    dataURL: off.toDataURL('image/jpeg', 0.72),
+    angles:  angles ? { ...angles } : {},
+    phase:   phase || 'unknown',
+  });
   if (ringBuffer.length > BUFFER_MAX) ringBuffer.shift();
-
-  // if user is actively recording, also push to savedFrames
-  if (state.recording) {
-    savedFrames.push(frame);
-    if (savedFrames.length > SAVED_MAX) savedFrames.shift();
-  }
 }
 
-function toggleRecord() {
-  if (!state.cameraActive) return;
-  state.recording = !state.recording;
-  const btn = document.getElementById('btn-record');
-  btn.classList.toggle('recording', state.recording);
-
-  if (state.recording) {
-    // Start recording — seed with last 3.5 seconds from ring buffer
-    savedFrames.length = 0;
-    const seed = ringBuffer.slice(-Math.floor(BUFFER_MAX * 0.875));
-    savedFrames.push(...seed);
-    setStatus('active', '● REC — ' + savedFrames.length + ' pre-frames loaded');
-  } else {
-    // Stopped recording
-    setStatus('active', savedFrames.length + ' frames saved');
-    if (savedFrames.length > 0) {
-      document.getElementById('btn-review').style.display = '';
-    }
+// CAPTURE — freeze ring buffer and enter review
+function doCapture() {
+  if (ringBuffer.length === 0) {
+    setStatus('active', 'Wait for tracking to start...');
+    return;
   }
+  replayFrames = ringBuffer.slice();
+  enterReplay();
 }
 
 function enterReplay() {
-  replayFrames = savedFrames.slice(); // copy
-  if (replayFrames.length === 0) {
-    alert('No frames recorded. Hit record during a pitch first.');
-    return;
-  }
-
-  // Hide live view, show replay
-  document.getElementById('main').style.display         = 'none';
-  document.getElementById('phase-bar').style.display    = 'none';
-  document.getElementById('metrics-bar').style.display  = 'none';
-  document.getElementById('controls').style.display     = 'none';
-  const rp = document.getElementById('replay-panel');
-  rp.style.display        = 'flex';
-  rp.style.flexDirection  = 'column';
-  rp.style.position       = 'fixed';
-  rp.style.inset          = '0';
-  rp.style.zIndex         = '100';
+  document.getElementById('main').style.display        = 'none';
+  document.getElementById('phase-bar').style.display   = 'none';
+  document.getElementById('metrics-bar').style.display = 'none';
+  document.getElementById('controls').style.display    = 'none';
+  document.getElementById('replay-panel').style.display = 'flex';
 
   const scrub = document.getElementById('scrub-bar');
-  scrub.min   = 0;
-  scrub.max   = replayFrames.length - 1;
-  scrub.value = 0;
-
+  scrub.min = 0; scrub.max = replayFrames.length - 1; scrub.value = 0;
   document.getElementById('replay-frame-count').textContent =
-    replayFrames.length + ' frames  (' + (replayFrames.length / 30).toFixed(1) + 's)';
-
+    replayFrames.length + ' frames · ' + (replayFrames.length / 30).toFixed(1) + 's';
   replayIndex = 0;
   renderReplayFrame(0);
 }
 
 function exitReplay() {
-  const rp = document.getElementById('replay-panel');
-  rp.style.display  = 'none';
-  rp.style.position = '';
-  rp.style.inset    = '';
-  rp.style.zIndex   = '';
-
-  document.getElementById('main').style.display        = 'flex';
-  document.getElementById('phase-bar').style.display   = 'flex';
-  document.getElementById('metrics-bar').style.display = 'grid';
-  document.getElementById('controls').style.display    = 'flex';
+  document.getElementById('replay-panel').style.display = 'none';
+  document.getElementById('main').style.display         = 'flex';
+  document.getElementById('phase-bar').style.display    = 'flex';
+  document.getElementById('metrics-bar').style.display  = 'grid';
+  document.getElementById('controls').style.display     = 'flex';
+  setStatus('active', '● Pre-rolling...');
 }
 
 function renderReplayFrame(idx) {
-  if (idx < 0 || idx >= replayFrames.length) return;
+  idx = Math.max(0, Math.min(replayFrames.length - 1, idx));
   replayIndex = idx;
   const frame = replayFrames[idx];
-
   const canvas = document.getElementById('replay-canvas');
-  const img    = new Image();
+  const img = new Image();
   img.onload = () => {
-    canvas.width  = img.width;
-    canvas.height = img.height;
+    canvas.width = img.width; canvas.height = img.height;
     canvas.getContext('2d').drawImage(img, 0, 0);
   };
   img.src = frame.dataURL;
-
   document.getElementById('replay-frame-label').textContent =
     'Frame ' + (idx + 1) + ' / ' + replayFrames.length;
   document.getElementById('scrub-bar').value = idx;
-
-  // metrics
   const a = frame.angles || {};
   const grade = (key, val) => {
     if (val == null) return '';
-    const b = BENCH[key];
-    if (!b) return '';
+    const b = BENCH[key]; if (!b) return '';
     return val >= b[0] && val <= b[1] ? 'good' : (val < b[0]-15 || val > b[1]+15) ? 'bad' : 'warn';
   };
-  [['rm-elbow','elbow'],['rm-hip','hip'],['rm-knee','knee']].forEach(([id, key]) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const v = a[key];
-    el.textContent  = v != null ? v : '—';
-    el.className    = 'm-val ' + grade(key, v);
+  [['rm-elbow','elbow'],['rm-hip','hip'],['rm-knee','knee']].forEach(([id,key]) => {
+    const el = document.getElementById(id); if (!el) return;
+    const v = a[key]; el.textContent = v != null ? v : '—';
+    el.className = 'm-val ' + grade(key, v);
   });
-  const phEl = document.getElementById('rm-phase');
-  if (phEl) { phEl.textContent = frame.phase || '—'; phEl.className = 'm-val'; }
+  const ph = document.getElementById('rm-phase');
+  if (ph) { ph.textContent = frame.phase || '—'; ph.className = 'm-val'; }
 }
 
 function scrubToFrame(idx) { renderReplayFrame(parseInt(idx)); }
-function stepFrame(delta) {
-  renderReplayFrame(Math.max(0, Math.min(replayFrames.length - 1, replayIndex + delta)));
-}
+function stepFrame(delta)   { renderReplayFrame(replayIndex + delta); }
+function toggleRecord()     {} // no-op — kept for safety
 
 function toggleSettings() {
   const p = document.getElementById('settings-panel');
