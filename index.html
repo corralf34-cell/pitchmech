@@ -842,11 +842,11 @@ function initPose() {
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
   });
   pose.setOptions({
-    modelComplexity: 1,
+    modelComplexity: 0,
     smoothLandmarks: true,
     enableSegmentation: false,
-    minDetectionConfidence: 0.6,
-    minTrackingConfidence: 0.5,
+    minDetectionConfidence: 0.55,
+    minTrackingConfidence: 0.45,
   });
   pose.onResults(onResults);
   pose.initialize().then(() => {
@@ -1304,19 +1304,26 @@ function stopDashcam() {
 function grabDashcamFrame() {
   const video = document.getElementById('video');
   if (!video || video.readyState < 2 || state.inReplay) return;
-  const w = video.videoWidth || 640, h = video.videoHeight || 480;
+
+  // Use actual video resolution — preserves aspect ratio
+  const w = video.videoWidth  || 640;
+  const h = video.videoHeight || 480;
+
   const off = document.createElement('canvas');
-  off.width = w; off.height = h;
+  off.width  = w;
+  off.height = h;
   const ctx = off.getContext('2d');
+
   const mir = state.facingMode === 'user' && state.opts.mirror;
   if (mir) { ctx.save(); ctx.translate(w, 0); ctx.scale(-1, 1); }
   ctx.drawImage(video, 0, 0, w, h);
   if (mir) ctx.restore();
+
   dashcamBuffer.push({
-    dataURL:    off.toDataURL('image/jpeg', 0.75),
-    landmarks:  state.landmarks ? state.landmarks.map(l => ({...l})) : null,
-    angles:     null, // computed during replay analysis
-    phase:      state.currentPhase,
+    dataURL:   off.toDataURL('image/jpeg', 0.82),
+    landmarks: state.landmarks ? state.landmarks.map(l => ({...l})) : null,
+    angles:    null,
+    phase:     state.currentPhase,
     w, h,
   });
   if (dashcamBuffer.length > DASHCAM_MAX) dashcamBuffer.shift();
@@ -1403,25 +1410,35 @@ function renderReplayFrame(idx) {
   document.getElementById('ft-frame').textContent = idx + 1;
   document.getElementById('ft-time').textContent  = (idx / DASHCAM_FPS).toFixed(2);
 
-  // Draw video frame on replay canvas
   const canvas = document.getElementById('replay-canvas');
-  const img = new Image();
+  const dc     = document.getElementById('draw-canvas');
+  const img    = new Image();
+
   img.onload = () => {
+    // Set canvas to exact image dimensions — no compression
     canvas.width  = img.width;
     canvas.height = img.height;
+    // Force CSS to fill container while preserving aspect ratio
+    canvas.style.width    = '100%';
+    canvas.style.height   = '100%';
+    canvas.style.objectFit = 'contain';
+
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
-    // Draw skeleton on top
+
     if (frame.landmarks && state.opts.skeleton) {
       drawSkeleton(ctx, frame.landmarks, canvas.width, canvas.height);
     }
-    // Sync draw canvas size
-    const dc = document.getElementById('draw-canvas');
-    if (dc.width !== canvas.width || dc.height !== canvas.height) {
-      const saved = dc.getContext('2d').getImageData(0, 0, dc.width, dc.height);
-      dc.width = canvas.width; dc.height = canvas.height;
-      dc.getContext('2d').putImageData(saved, 0, 0);
-    }
+
+    // Match draw canvas to replay canvas exactly
+    dc.width  = canvas.width;
+    dc.height = canvas.height;
+    dc.style.width    = canvas.style.width;
+    dc.style.height   = canvas.style.height;
+    dc.style.objectFit = 'contain';
+
+    // Redraw any existing annotations
+    redrawAnnotations();
   };
   img.src = frame.dataURL;
 
@@ -1499,10 +1516,8 @@ function exitReplay() {
 // ─── DRAWING TOOLS ────────────────────────────────────────────────────────────
 function setupDrawCanvas() {
   const dc = document.getElementById('draw-canvas');
-  const rv = document.getElementById('replay-video');
-  dc.width  = rv.videoWidth  || rv.clientWidth  || 640;
-  dc.height = rv.videoHeight || rv.clientHeight || 480;
   dc.style.display = 'block';
+  dc.style.pointerEvents = 'none'; // start with off
 
   dc.onpointerdown = startDraw;
   dc.onpointermove = moveDraw;
@@ -1511,13 +1526,29 @@ function setupDrawCanvas() {
 }
 
 function getCanvasPos(e, canvas) {
+  // Use getBoundingClientRect for accurate position regardless of CSS scaling
   const r = canvas.getBoundingClientRect();
+  // Scale from displayed size back to canvas pixel size
   const scaleX = canvas.width  / r.width;
   const scaleY = canvas.height / r.height;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
   return {
-    x: (e.clientX - r.left) * scaleX,
-    y: (e.clientY - r.top)  * scaleY,
+    x: (clientX - r.left) * scaleX,
+    y: (clientY - r.top)  * scaleY,
   };
+}
+
+function redrawAnnotations() {
+  const dc  = document.getElementById('draw-canvas');
+  const ctx = dc.getContext('2d');
+  ctx.clearRect(0, 0, dc.width, dc.height);
+  for (const s of drawState.shapes) {
+    const saved = drawState.tool;
+    drawState.tool = s.tool;
+    drawShape(ctx, s.x1, s.y1, s.x2, s.y2, s.color, true);
+    drawState.tool = saved;
+  }
 }
 
 function startDraw(e) {
@@ -1585,8 +1616,9 @@ function setTool(tool) {
   document.querySelectorAll('.draw-tool').forEach(b => b.classList.remove('active-tool'));
   const btn = document.getElementById('tool-' + tool);
   if (btn) btn.classList.add('active-tool');
+  // Only enable pointer events on draw canvas when a tool is active
   const dc = document.getElementById('draw-canvas');
-  dc.style.pointerEvents = tool === 'none' ? 'none' : 'auto';
+  if (dc) dc.style.pointerEvents = tool === 'none' ? 'none' : 'auto';
 }
 
 function setColor(color) {
