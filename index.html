@@ -454,8 +454,17 @@
   }
   #hand-badge span { color: var(--orange); font-weight: 700; }
 
-  /* LOADING STATE */
-  #loading-msg {
+  .color-swatch {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: border-color 0.15s, transform 0.15s;
+    flex-shrink: 0;
+  }
+  .color-swatch:active { transform: scale(0.9); }
+  .active-swatch { border-color: white !important; transform: scale(1.15); }
+  .draw-tool.active-tool { background: var(--orange-glow); border-color: var(--orange); color: var(--orange); }
     font-size: 12px;
     color: var(--text-dim);
     letter-spacing: 0.05em;
@@ -618,40 +627,85 @@
 
 <!-- REPLAY PANEL -->
 <div id="replay-panel" style="display:none;flex-direction:column;background:var(--navy);position:fixed;inset:0;z-index:100;">
+
   <!-- replay header -->
-  <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--navy-mid);border-bottom:1px solid var(--border);flex-shrink:0;">
+  <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--navy-mid);border-bottom:1px solid var(--border);flex-shrink:0;">
     <span style="font-size:11px;color:var(--orange);letter-spacing:0.1em;text-transform:uppercase;font-weight:700;">⏪ Capture Review</span>
-    <span id="replay-frame-count" style="font-size:11px;color:var(--text-dim);"></span>
+    <span id="replay-status" style="font-size:11px;color:var(--text-dim);">Processing...</span>
     <div style="flex:1"></div>
-    <button class="btn sm" onclick="exitReplay()">▶ Back to Live</button>
+    <button class="btn sm" id="btn-back-live" onclick="exitReplay()">▶ Back to Live</button>
   </div>
-  <!-- replay video area -->
-  <div style="flex:1;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;">
-    <canvas id="replay-canvas" style="max-width:100%;max-height:100%;display:block;"></canvas>
-    <!-- frame label overlay -->
-    <div style="position:absolute;bottom:8px;right:10px;background:rgba(10,15,30,0.7);padding:4px 10px;border-radius:6px;font-size:12px;color:var(--orange);" id="replay-frame-label">Frame 1</div>
+
+  <!-- video + skeleton canvas stack -->
+  <div style="flex:1;background:#000;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+    <video id="replay-video" style="max-width:100%;max-height:100%;display:block;" playsinline muted></video>
+    <canvas id="replay-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></canvas>
+    <!-- drawing canvas on top -->
+    <canvas id="draw-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;display:none;"></canvas>
+
+    <!-- frame timer overlay -->
+    <div id="frame-timer" style="position:absolute;top:8px;left:10px;background:rgba(10,15,30,0.8);padding:4px 10px;border-radius:6px;font-size:12px;color:var(--orange);display:none;">
+      Frame <span id="ft-frame">0</span> · <span id="ft-time">0.00</span>s
+    </div>
+
+    <!-- processing overlay -->
+    <div id="processing-overlay" style="position:absolute;inset:0;background:rgba(10,15,30,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">
+      <div style="font-size:32px;">⚾</div>
+      <div style="font-size:13px;color:var(--orange);letter-spacing:0.1em;" id="proc-msg">Preparing replay...</div>
+      <div style="width:200px;height:4px;background:var(--border-dim);border-radius:2px;overflow:hidden;">
+        <div id="proc-bar" style="height:100%;background:var(--orange);border-radius:2px;width:0%;transition:width 0.2s;"></div>
+      </div>
+    </div>
   </div>
-  <!-- scrub bar -->
-  <div style="padding:10px 16px 6px;background:var(--navy-panel);border-top:1px solid var(--border-dim);flex-shrink:0;">
-    <input type="range" id="scrub-bar" min="0" value="0" step="1"
-      style="width:100%;accent-color:var(--orange);height:6px;cursor:pointer;"
-      oninput="scrubToFrame(parseInt(this.value))">
-  </div>
-  <!-- step buttons -->
-  <div style="display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--navy-panel);flex-shrink:0;">
-    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(-30)">⏮ Start</button>
-    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(-10)">« -10</button>
-    <button class="btn primary" style="flex:1;justify-content:center;" onclick="stepFrame(-1)">◀ -1</button>
-    <button class="btn primary" style="flex:1;justify-content:center;" onclick="stepFrame(1)">+1 ▶</button>
-    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(10)">+10 »</button>
-    <button class="btn" style="flex:1;justify-content:center;" onclick="stepFrame(999)">End ⏭</button>
-  </div>
-  <!-- angle readouts -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-dim);flex-shrink:0;">
-    <div class="metric-cell"><span class="m-label">Elbow</span><span class="m-val" id="rm-elbow">—</span><span class="m-unit">deg</span></div>
-    <div class="metric-cell"><span class="m-label">Hip Sep</span><span class="m-val" id="rm-hip">—</span><span class="m-unit">deg</span></div>
-    <div class="metric-cell"><span class="m-label">Lead Knee</span><span class="m-val" id="rm-knee">—</span><span class="m-unit">deg</span></div>
-    <div class="metric-cell"><span class="m-label">Phase</span><span class="m-val" id="rm-phase" style="font-size:11px;">—</span><span class="m-unit">detected</span></div>
+
+  <!-- playback controls -->
+  <div id="playback-controls" style="display:none;flex-direction:column;flex-shrink:0;">
+
+    <!-- scrub bar -->
+    <div style="padding:8px 16px 4px;background:var(--navy-panel);">
+      <input type="range" id="replay-scrub" min="0" value="0" step="1"
+        style="width:100%;accent-color:var(--orange);cursor:pointer;"
+        oninput="scrubReplay(this.value)">
+    </div>
+
+    <!-- step buttons -->
+    <div style="display:flex;gap:6px;padding:6px 16px;background:var(--navy-panel);">
+      <button class="btn sm" style="flex:1;justify-content:center;" onclick="replayStep(-30)">⏮</button>
+      <button class="btn sm" style="flex:1;justify-content:center;" onclick="replayStep(-5)">«5</button>
+      <button class="btn sm" style="flex:1;justify-content:center;" onclick="replayStep(-1)">◀1</button>
+      <button class="btn primary sm" style="flex:1;justify-content:center;" id="btn-play-pause" onclick="togglePlayPause()">▶ Play</button>
+      <button class="btn sm" style="flex:1;justify-content:center;" onclick="replayStep(1)">1▶</button>
+      <button class="btn sm" style="flex:1;justify-content:center;" onclick="replayStep(5)">5»</button>
+      <button class="btn sm" style="flex:1;justify-content:center;" onclick="replayStep(30)">⏭</button>
+    </div>
+
+    <!-- drawing toolbar -->
+    <div id="draw-toolbar" style="display:flex;gap:6px;padding:6px 16px;background:var(--navy-mid);border-top:1px solid var(--border-dim);align-items:center;flex-wrap:wrap;">
+      <span style="font-size:9px;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;">Draw:</span>
+      <button class="btn sm draw-tool" id="tool-none" onclick="setTool('none')" style="border-color:var(--orange);color:var(--orange);">✕ Off</button>
+      <button class="btn sm draw-tool" id="tool-line" onclick="setTool('line')">╱ Line</button>
+      <button class="btn sm draw-tool" id="tool-circle" onclick="setTool('circle')">◯ Circle</button>
+      <button class="btn sm draw-tool" id="tool-arrow" onclick="setTool('arrow')">→ Arrow</button>
+      <button class="btn sm" onclick="clearDrawing()" style="color:var(--red);border-color:var(--red);">🗑 Clear</button>
+      <div style="flex:1"></div>
+      <!-- color swatches -->
+      <div style="display:flex;gap:5px;align-items:center;">
+        <div class="color-swatch active-swatch" style="background:#f97316;" onclick="setColor('#f97316')"></div>
+        <div class="color-swatch" style="background:#22c55e;" onclick="setColor('#22c55e')"></div>
+        <div class="color-swatch" style="background:#ef4444;" onclick="setColor('#ef4444')"></div>
+        <div class="color-swatch" style="background:#14b8a6;" onclick="setColor('#14b8a6')"></div>
+        <div class="color-swatch" style="background:#ffffff;" onclick="setColor('#ffffff')"></div>
+        <div class="color-swatch" style="background:#eab308;" onclick="setColor('#eab308')"></div>
+      </div>
+    </div>
+
+    <!-- angle metrics -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-dim);flex-shrink:0;">
+      <div class="metric-cell"><span class="m-label">Elbow</span><span class="m-val" id="rv-elbow">—</span><span class="m-unit">deg</span></div>
+      <div class="metric-cell"><span class="m-label">Hip Sep</span><span class="m-val" id="rv-hip">—</span><span class="m-unit">deg</span></div>
+      <div class="metric-cell"><span class="m-label">Lead Knee</span><span class="m-val" id="rv-knee">—</span><span class="m-unit">deg</span></div>
+      <div class="metric-cell"><span class="m-label">Phase</span><span class="m-val" id="rv-phase" style="font-size:10px;">—</span><span class="m-unit">detected</span></div>
+    </div>
   </div>
 </div>
 
@@ -828,12 +882,12 @@ async function startCamera() {
     video.srcObject = state.stream;
     await video.play();
     state.cameraActive = true;
-
     document.getElementById('idle-overlay').style.display = 'none';
     document.getElementById('btn-live').style.display = 'none';
     document.getElementById('btn-capture').style.display = '';
     applyMirror();
     setStatus('active', '● Pre-rolling...');
+    startDashcam(state.stream);
     runPose();
   } catch(e) {
     setStatus('off', 'Camera denied');
@@ -842,6 +896,7 @@ async function startCamera() {
 }
 
 function stopCamera() {
+  stopDashcam();
   if (state.stream) {
     state.stream.getTracks().forEach(t => t.stop());
     state.stream = null;
@@ -921,7 +976,6 @@ function onResults(results) {
 
   updateUI(angles);
   detectPhase(results.poseLandmarks, angles);
-  buildFrame(results.poseLandmarks, angles, state.currentPhase);
 }
 
 // ─── SKELETON DRAWING ─────────────────────────────────────────────────────────
@@ -1211,104 +1265,446 @@ function clearCanvas() {
   ctx.clearRect(0, 0, c.width, c.height);
 }
 
-// ─── RECORDING & REPLAY ──────────────────────────────────────────────────────
-// Always-on dashcam ring buffer — last ~3.5 seconds at ~30fps
-const BUFFER_MAX = 105;
-const ringBuffer = [];
-let replayFrames = [];
-let replayIndex  = 0;
+// ─── DASHCAM MEDIA RECORDER ───────────────────────────────────────────────────
+const DASHCAM_SECS = 3;
+let mediaRecorder   = null;
+let chunkBuffer     = [];   // rolling chunks
+let chunkTimestamps = [];   // timestamp per chunk
+let capturedBlob    = null;
 
-// Called every pose result — always fills ring buffer
-function buildFrame(landmarks, angles, phase) {
-  const video = document.getElementById('video');
-  if (!video || video.readyState < 2) return;
-  const w = video.videoWidth || 640, h = video.videoHeight || 480;
-  const off = document.createElement('canvas');
-  off.width = w; off.height = h;
-  const ctx = off.getContext('2d');
-  const mir = state.facingMode === 'user' && state.opts.mirror;
-  if (mir) { ctx.save(); ctx.translate(w, 0); ctx.scale(-1, 1); }
-  ctx.drawImage(video, 0, 0, w, h);
-  if (mir) ctx.restore();
-  if (state.opts.skeleton && landmarks) drawSkeleton(ctx, landmarks, w, h);
-  ringBuffer.push({
-    dataURL: off.toDataURL('image/jpeg', 0.72),
-    angles:  angles ? { ...angles } : {},
-    phase:   phase || 'unknown',
-  });
-  if (ringBuffer.length > BUFFER_MAX) ringBuffer.shift();
+// Replay state
+let replayFrameData = [];   // { time, landmarks, angles, phase }
+let replayCurrentFrame = 0;
+let replayIsPlaying = false;
+let replayRAF = null;
+let replayFPS = 30;
+
+// Drawing state
+const drawState = {
+  tool: 'none',
+  color: '#f97316',
+  drawing: false,
+  startX: 0, startY: 0,
+  shapes: [],       // committed shapes
+  snapshot: null,   // canvas snapshot before current stroke
+};
+
+// ─── START DASHCAM ────────────────────────────────────────────────────────────
+function startDashcam(stream) {
+  // Try to get supported mime type
+  const mimes = ['video/webm;codecs=vp8','video/webm','video/mp4'];
+  let mime = mimes.find(m => MediaRecorder.isTypeSupported(m)) || '';
+
+  try {
+    mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+  } catch(e) {
+    mediaRecorder = new MediaRecorder(stream);
+  }
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      chunkBuffer.push(e.data);
+      chunkTimestamps.push(Date.now());
+      // Keep only last DASHCAM_SECS worth — trim old chunks
+      const cutoff = Date.now() - (DASHCAM_SECS * 1000 + 500);
+      while (chunkTimestamps.length > 1 && chunkTimestamps[0] < cutoff) {
+        chunkBuffer.shift();
+        chunkTimestamps.shift();
+      }
+    }
+  };
+
+  mediaRecorder.start(200); // chunk every 200ms = ~15 chunks for 3s
 }
 
-// CAPTURE — freeze ring buffer and enter review
+function stopDashcam() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  mediaRecorder = null;
+  chunkBuffer = [];
+  chunkTimestamps = [];
+}
+
+// ─── CAPTURE ─────────────────────────────────────────────────────────────────
 function doCapture() {
-  if (ringBuffer.length === 0) {
-    setStatus('active', 'Wait for tracking to start...');
+  if (!mediaRecorder || chunkBuffer.length === 0) {
+    setStatus('active', 'Keep camera live — try again');
     return;
   }
-  replayFrames = ringBuffer.slice();
-  state.inReplay = true; // pause pose loop
-  enterReplay();
+
+  // Freeze the current chunks
+  const chunks = chunkBuffer.slice();
+  capturedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'video/webm' });
+
+  state.inReplay = true;
+  enterReplay(capturedBlob);
 }
 
-function enterReplay() {
+// ─── ENTER REPLAY ─────────────────────────────────────────────────────────────
+function enterReplay(blob) {
   document.getElementById('main').style.display        = 'none';
   document.getElementById('phase-bar').style.display   = 'none';
   document.getElementById('metrics-bar').style.display = 'none';
   document.getElementById('controls').style.display    = 'none';
   document.getElementById('replay-panel').style.display = 'flex';
+  document.getElementById('playback-controls').style.display = 'none';
+  document.getElementById('processing-overlay').style.display = 'flex';
+  document.getElementById('proc-msg').textContent = 'Loading video...';
+  document.getElementById('proc-bar').style.width = '20%';
 
-  const scrub = document.getElementById('scrub-bar');
-  scrub.min = 0; scrub.max = replayFrames.length - 1; scrub.value = 0;
-  document.getElementById('replay-frame-count').textContent =
-    replayFrames.length + ' frames · ' + (replayFrames.length / 30).toFixed(1) + 's';
-  replayIndex = 0;
-  renderReplayFrame(0);
-}
+  const rv = document.getElementById('replay-video');
+  const url = URL.createObjectURL(blob);
+  rv.src = url;
+  rv.playbackRate = 0.5;
+  rv.load();
 
-function exitReplay() {
-  document.getElementById('replay-panel').style.display = 'none';
-  document.getElementById('main').style.display         = 'flex';
-  document.getElementById('phase-bar').style.display    = 'flex';
-  document.getElementById('metrics-bar').style.display  = 'grid';
-  document.getElementById('controls').style.display     = 'flex';
-  setStatus('active', '● Pre-rolling...');
-  state.inReplay = false;
-  // Restart pose loop
-  if (state.cameraActive) runPose();
-}
-
-function renderReplayFrame(idx) {
-  idx = Math.max(0, Math.min(replayFrames.length - 1, idx));
-  replayIndex = idx;
-  const frame = replayFrames[idx];
-  const canvas = document.getElementById('replay-canvas');
-  const img = new Image();
-  img.onload = () => {
-    canvas.width = img.width; canvas.height = img.height;
-    canvas.getContext('2d').drawImage(img, 0, 0);
+  rv.onloadedmetadata = () => {
+    document.getElementById('proc-bar').style.width = '50%';
+    document.getElementById('proc-msg').textContent = 'Analyzing frames...';
+    analyzeVideoFrames(rv);
   };
-  img.src = frame.dataURL;
-  document.getElementById('replay-frame-label').textContent =
-    'Frame ' + (idx + 1) + ' / ' + replayFrames.length;
-  document.getElementById('scrub-bar').value = idx;
-  const a = frame.angles || {};
+
+  rv.onerror = () => {
+    document.getElementById('proc-msg').textContent = 'Video load failed — try again';
+  };
+}
+
+// ─── FRAME ANALYSIS ───────────────────────────────────────────────────────────
+async function analyzeVideoFrames(videoEl) {
+  const duration = videoEl.duration;
+  replayFPS = 30;
+  const frameInterval = 1 / replayFPS;
+  const totalFrames = Math.floor(duration * replayFPS);
+  replayFrameData = [];
+
+  // Use offscreen canvas to extract frames and run pose
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width  = videoEl.videoWidth  || 640;
+  offCanvas.height = videoEl.videoHeight || 480;
+  const offCtx = offCanvas.getContext('2d');
+
+  for (let i = 0; i < totalFrames; i++) {
+    const t = i * frameInterval;
+    videoEl.currentTime = t;
+    await new Promise(r => { videoEl.onseeked = r; });
+    offCtx.drawImage(videoEl, 0, 0, offCanvas.width, offCanvas.height);
+
+    // Run pose on this frame
+    let landmarks = null, angles = null, phase = 'unknown';
+    try {
+      await new Promise((resolve) => {
+        const tempOnResults = (results) => {
+          if (results.poseLandmarks) {
+            landmarks = results.poseLandmarks;
+            angles    = computeAngles(landmarks);
+            phase     = guessPhase(landmarks, angles);
+          }
+          resolve();
+        };
+        pose.onResults(tempOnResults);
+        pose.send({ image: offCanvas }).catch(resolve);
+      });
+    } catch(e) {}
+
+    replayFrameData.push({ time: t, landmarks, angles, phase });
+
+    // Progress bar
+    const pct = 50 + Math.round((i / totalFrames) * 45);
+    document.getElementById('proc-bar').style.width = pct + '%';
+    document.getElementById('proc-msg').textContent =
+      'Analyzing frame ' + (i+1) + ' / ' + totalFrames + '...';
+
+    // Yield to browser every 5 frames
+    if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  // Restore normal onResults
+  pose.onResults(onResults);
+
+  document.getElementById('proc-bar').style.width = '100%';
+  document.getElementById('proc-msg').textContent = 'Ready!';
+  await new Promise(r => setTimeout(r, 400));
+
+  finishReplaySetup(videoEl, totalFrames);
+}
+
+function guessPhase(lms, angles) {
+  if (!lms) return 'unknown';
+  const isRHP = state.isRHP;
+  const knee  = isRHP ? lms[26] : lms[25];
+  const hip   = isRHP ? lms[24] : lms[23];
+  const wrist = isRHP ? lms[16] : lms[15];
+  const shldr = isRHP ? lms[12] : lms[11];
+  if (!knee || !hip) return 'unknown';
+  const kneeUp  = knee.visibility > 0.4 && (hip.y - knee.y) > 0.05;
+  const armHigh = wrist && shldr && wrist.visibility > 0.4 && wrist.y < shldr.y;
+  if (kneeUp && !armHigh) return 'stride';
+  if (armHigh && angles?.elbow && angles.elbow < 110) return 'acceleration';
+  if (armHigh && angles?.elbow && angles.elbow >= 110) return 'release';
+  if (!kneeUp && armHigh) return 'followthrough';
+  if (!kneeUp && !armHigh && angles?.hip && angles.hip > 15) return 'footplant';
+  return 'windup';
+}
+
+function finishReplaySetup(videoEl, totalFrames) {
+  document.getElementById('processing-overlay').style.display = 'none';
+  document.getElementById('playback-controls').style.display  = 'flex';
+  document.getElementById('frame-timer').style.display = 'block';
+
+  const scrub = document.getElementById('replay-scrub');
+  scrub.min = 0; scrub.max = totalFrames - 1; scrub.value = 0;
+
+  document.getElementById('replay-status').textContent =
+    totalFrames + ' frames · ' + videoEl.duration.toFixed(1) + 's · ½ speed';
+
+  // Reset drawing
+  drawState.shapes = [];
+  clearDrawCanvas();
+  setupDrawCanvas();
+
+  replayCurrentFrame = 0;
+  replayIsPlaying    = false;
+  document.getElementById('btn-play-pause').textContent = '▶ Play';
+
+  // Show first frame
+  seekReplayTo(0);
+}
+
+// ─── REPLAY PLAYBACK ──────────────────────────────────────────────────────────
+function seekReplayTo(frameIdx) {
+  frameIdx = Math.max(0, Math.min(replayFrameData.length - 1, frameIdx));
+  replayCurrentFrame = frameIdx;
+
+  const rv = document.getElementById('replay-video');
+  const fd = replayFrameData[frameIdx];
+  if (!fd) return;
+
+  rv.currentTime = fd.time;
+  document.getElementById('replay-scrub').value = frameIdx;
+  document.getElementById('ft-frame').textContent = frameIdx + 1;
+  document.getElementById('ft-time').textContent  = fd.time.toFixed(2);
+
+  // Draw skeleton on replay canvas
+  drawReplayFrame(fd);
+  updateReplayMetrics(fd);
+}
+
+function drawReplayFrame(fd) {
+  const rv     = document.getElementById('replay-video');
+  const canvas = document.getElementById('replay-canvas');
+  canvas.width  = rv.videoWidth  || rv.clientWidth;
+  canvas.height = rv.videoHeight || rv.clientHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (fd.landmarks && state.opts.skeleton) {
+    drawSkeleton(ctx, fd.landmarks, canvas.width, canvas.height);
+  }
+}
+
+function togglePlayPause() {
+  const rv = document.getElementById('replay-video');
+  if (replayIsPlaying) {
+    replayIsPlaying = false;
+    rv.pause();
+    if (replayRAF) { cancelAnimationFrame(replayRAF); replayRAF = null; }
+    document.getElementById('btn-play-pause').textContent = '▶ Play';
+  } else {
+    replayIsPlaying = true;
+    rv.playbackRate = 0.5;
+    rv.play();
+    document.getElementById('btn-play-pause').textContent = '⏸ Pause';
+    trackPlayback();
+  }
+}
+
+function trackPlayback() {
+  const rv = document.getElementById('replay-video');
+  if (!replayIsPlaying) return;
+  if (rv.ended) {
+    replayIsPlaying = false;
+    document.getElementById('btn-play-pause').textContent = '▶ Play';
+    return;
+  }
+  // Find closest frame to current video time
+  const t = rv.currentTime;
+  let closest = 0, minDiff = Infinity;
+  for (let i = 0; i < replayFrameData.length; i++) {
+    const diff = Math.abs(replayFrameData[i].time - t);
+    if (diff < minDiff) { minDiff = diff; closest = i; }
+  }
+  if (closest !== replayCurrentFrame) {
+    replayCurrentFrame = closest;
+    document.getElementById('replay-scrub').value = closest;
+    document.getElementById('ft-frame').textContent = closest + 1;
+    document.getElementById('ft-time').textContent  = t.toFixed(2);
+    drawReplayFrame(replayFrameData[closest]);
+    updateReplayMetrics(replayFrameData[closest]);
+  }
+  replayRAF = requestAnimationFrame(trackPlayback);
+}
+
+function replayStep(delta) {
+  if (replayIsPlaying) togglePlayPause();
+  seekReplayTo(replayCurrentFrame + delta);
+}
+
+function scrubReplay(val) {
+  if (replayIsPlaying) togglePlayPause();
+  seekReplayTo(parseInt(val));
+}
+
+function updateReplayMetrics(fd) {
+  const a = fd.angles || {};
   const grade = (key, val) => {
     if (val == null) return '';
     const b = BENCH[key]; if (!b) return '';
     return val >= b[0] && val <= b[1] ? 'good' : (val < b[0]-15 || val > b[1]+15) ? 'bad' : 'warn';
   };
-  [['rm-elbow','elbow'],['rm-hip','hip'],['rm-knee','knee']].forEach(([id,key]) => {
+  [['rv-elbow','elbow'],['rv-hip','hip'],['rv-knee','knee']].forEach(([id,key]) => {
     const el = document.getElementById(id); if (!el) return;
     const v = a[key]; el.textContent = v != null ? v : '—';
     el.className = 'm-val ' + grade(key, v);
   });
-  const ph = document.getElementById('rm-phase');
-  if (ph) { ph.textContent = frame.phase || '—'; ph.className = 'm-val'; }
+  const ph = document.getElementById('rv-phase');
+  if (ph) { ph.textContent = fd.phase || '—'; ph.className = 'm-val'; }
 }
 
-function scrubToFrame(idx) { renderReplayFrame(parseInt(idx)); }
-function stepFrame(delta)   { renderReplayFrame(replayIndex + delta); }
-function toggleRecord()     {} // no-op — kept for safety
+// ─── EXIT REPLAY ─────────────────────────────────────────────────────────────
+function exitReplay() {
+  const rv = document.getElementById('replay-video');
+  rv.pause();
+  if (replayRAF) { cancelAnimationFrame(replayRAF); replayRAF = null; }
+  replayIsPlaying = false;
+
+  document.getElementById('replay-panel').style.display = 'none';
+  document.getElementById('main').style.display         = 'flex';
+  document.getElementById('phase-bar').style.display    = 'flex';
+  document.getElementById('metrics-bar').style.display  = 'grid';
+  document.getElementById('controls').style.display     = 'flex';
+  document.getElementById('frame-timer').style.display  = 'none';
+
+  state.inReplay = false;
+  setStatus('active', '● Pre-rolling...');
+  if (state.cameraActive) runPose();
+}
+
+// ─── DRAWING TOOLS ────────────────────────────────────────────────────────────
+function setupDrawCanvas() {
+  const dc = document.getElementById('draw-canvas');
+  const rv = document.getElementById('replay-video');
+  dc.width  = rv.videoWidth  || rv.clientWidth  || 640;
+  dc.height = rv.videoHeight || rv.clientHeight || 480;
+  dc.style.display = 'block';
+
+  dc.onpointerdown = startDraw;
+  dc.onpointermove = moveDraw;
+  dc.onpointerup   = endDraw;
+  dc.onpointercancel = endDraw;
+}
+
+function getCanvasPos(e, canvas) {
+  const r = canvas.getBoundingClientRect();
+  const scaleX = canvas.width  / r.width;
+  const scaleY = canvas.height / r.height;
+  return {
+    x: (e.clientX - r.left) * scaleX,
+    y: (e.clientY - r.top)  * scaleY,
+  };
+}
+
+function startDraw(e) {
+  if (drawState.tool === 'none') return;
+  e.preventDefault();
+  const dc = document.getElementById('draw-canvas');
+  const pos = getCanvasPos(e, dc);
+  drawState.drawing = true;
+  drawState.startX  = pos.x;
+  drawState.startY  = pos.y;
+  // Save snapshot of current drawing
+  const ctx = dc.getContext('2d');
+  drawState.snapshot = ctx.getImageData(0, 0, dc.width, dc.height);
+}
+
+function moveDraw(e) {
+  if (!drawState.drawing || drawState.tool === 'none') return;
+  e.preventDefault();
+  const dc  = document.getElementById('draw-canvas');
+  const ctx = dc.getContext('2d');
+  const pos = getCanvasPos(e, dc);
+  // Restore snapshot then draw preview
+  ctx.putImageData(drawState.snapshot, 0, 0);
+  drawShape(ctx, drawState.startX, drawState.startY, pos.x, pos.y, drawState.color, false);
+}
+
+function endDraw(e) {
+  if (!drawState.drawing) return;
+  drawState.drawing = false;
+  const dc  = document.getElementById('draw-canvas');
+  const ctx = dc.getContext('2d');
+  const pos = getCanvasPos(e, dc);
+  ctx.putImageData(drawState.snapshot, 0, 0);
+  drawShape(ctx, drawState.startX, drawState.startY, pos.x, pos.y, drawState.color, true);
+  drawState.shapes.push({ tool: drawState.tool, x1: drawState.startX, y1: drawState.startY, x2: pos.x, y2: pos.y, color: drawState.color });
+}
+
+function drawShape(ctx, x1, y1, x2, y2, color, commit) {
+  ctx.strokeStyle = color;
+  ctx.fillStyle   = color + '22';
+  ctx.lineWidth   = 3;
+  ctx.lineCap     = 'round';
+  if (drawState.tool === 'line') {
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  } else if (drawState.tool === 'circle') {
+    const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx || 1, ry || 1, 0, 0, Math.PI * 2);
+    ctx.stroke(); if (commit) ctx.fill();
+  } else if (drawState.tool === 'arrow') {
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    // arrowhead
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const len = 16;
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - len * Math.cos(angle - 0.4), y2 - len * Math.sin(angle - 0.4));
+    ctx.lineTo(x2 - len * Math.cos(angle + 0.4), y2 - len * Math.sin(angle + 0.4));
+    ctx.closePath(); ctx.fill();
+  }
+}
+
+function setTool(tool) {
+  drawState.tool = tool;
+  document.querySelectorAll('.draw-tool').forEach(b => b.classList.remove('active-tool'));
+  const btn = document.getElementById('tool-' + tool);
+  if (btn) btn.classList.add('active-tool');
+  const dc = document.getElementById('draw-canvas');
+  dc.style.pointerEvents = tool === 'none' ? 'none' : 'auto';
+}
+
+function setColor(color) {
+  drawState.color = color;
+  document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active-swatch'));
+  event.target.classList.add('active-swatch');
+}
+
+function clearDrawing() {
+  drawState.shapes = [];
+  clearDrawCanvas();
+}
+
+function clearDrawCanvas() {
+  const dc = document.getElementById('draw-canvas');
+  if (!dc) return;
+  const ctx = dc.getContext('2d');
+  ctx.clearRect(0, 0, dc.width, dc.height);
+}
+
+// Kept for safety — old frame-based system no longer used
+function toggleRecord() {}
+function scrubToFrame(v) {}
+function stepFrame(d) {}
 
 function toggleSettings() {
   const p = document.getElementById('settings-panel');
