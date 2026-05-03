@@ -887,7 +887,7 @@ async function startCamera() {
     document.getElementById('btn-capture').style.display = '';
     applyMirror();
     setStatus('active', '● Pre-rolling...');
-    startDashcam(state.stream);
+    startDashcam();
     runPose();
   } catch(e) {
     setStatus('off', 'Camera denied');
@@ -951,16 +951,24 @@ function runPose() {
 // ─── RESULTS ─────────────────────────────────────────────────────────────────
 function onResults(results) {
   const canvas = document.getElementById('canvas');
-  const video = document.getElementById('video');
-  canvas.width = video.videoWidth || video.clientWidth;
-  canvas.height = video.videoHeight || video.clientHeight;
+  const video  = document.getElementById('video');
+
+  // Match canvas to the DISPLAYED size of the video element
+  const rect = video.getBoundingClientRect();
+  canvas.width  = rect.width  || video.videoWidth  || 640;
+  canvas.height = rect.height || video.videoHeight || 480;
+  canvas.style.width  = rect.width  + 'px';
+  canvas.style.height = rect.height + 'px';
+  // Position canvas exactly over video
+  canvas.style.left = (video.offsetLeft || 0) + 'px';
+  canvas.style.top  = (video.offsetTop  || 0) + 'px';
+
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (!results.poseLandmarks) { resetMetrics(); return; }
   state.landmarks = results.poseLandmarks;
 
-  // Mirror the canvas context to match the mirrored video
   const shouldMirror = state.facingMode === 'user' && state.opts.mirror;
   if (shouldMirror) {
     ctx.save();
@@ -976,6 +984,9 @@ function onResults(results) {
 
   updateUI(angles);
   detectPhase(results.poseLandmarks, angles);
+
+  // Feed dashcam buffer
+  dashcamCapture(results.poseLandmarks, angles, state.currentPhase);
 }
 
 // ─── SKELETON DRAWING ─────────────────────────────────────────────────────────
@@ -1265,84 +1276,80 @@ function clearCanvas() {
   ctx.clearRect(0, 0, c.width, c.height);
 }
 
-// ─── DASHCAM MEDIA RECORDER ───────────────────────────────────────────────────
-const DASHCAM_SECS = 3;
-let mediaRecorder   = null;
-let chunkBuffer     = [];   // rolling chunks
-let chunkTimestamps = [];   // timestamp per chunk
-let capturedBlob    = null;
-
-// Replay state
-let replayFrameData = [];   // { time, landmarks, angles, phase }
-let replayCurrentFrame = 0;
-let replayIsPlaying = false;
-let replayRAF = null;
-let replayFPS = 30;
-
+// ─── DASHCAM — CANVAS FRAME BUFFER ───────────────────────────────────────────
 // Drawing state
 const drawState = {
-  tool: 'none',
-  color: '#f97316',
-  drawing: false,
-  startX: 0, startY: 0,
-  shapes: [],       // committed shapes
-  snapshot: null,   // canvas snapshot before current stroke
+  tool: 'none', color: '#f97316',
+  drawing: false, startX: 0, startY: 0,
+  shapes: [], snapshot: null,
 };
+// Stores raw video frames + landmark data. No MediaRecorder = works on all browsers.
+const DASHCAM_FPS  = 15;   // capture rate (balance quality vs memory)
+const DASHCAM_SECS = 3;
+const DASHCAM_MAX  = DASHCAM_FPS * DASHCAM_SECS; // 45 frames
+let dashcamBuffer  = [];
+let dashcamTimer   = null;
 
-// ─── START DASHCAM ────────────────────────────────────────────────────────────
-function startDashcam(stream) {
-  // Try to get supported mime type
-  const mimes = ['video/webm;codecs=vp8','video/webm','video/mp4'];
-  let mime = mimes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-
-  try {
-    mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
-  } catch(e) {
-    mediaRecorder = new MediaRecorder(stream);
-  }
-
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) {
-      chunkBuffer.push(e.data);
-      chunkTimestamps.push(Date.now());
-      // Keep only last DASHCAM_SECS worth — trim old chunks
-      const cutoff = Date.now() - (DASHCAM_SECS * 1000 + 500);
-      while (chunkTimestamps.length > 1 && chunkTimestamps[0] < cutoff) {
-        chunkBuffer.shift();
-        chunkTimestamps.shift();
-      }
-    }
-  };
-
-  mediaRecorder.start(200); // chunk every 200ms = ~15 chunks for 3s
+function startDashcam() {
+  if (dashcamTimer) clearInterval(dashcamTimer);
+  dashcamBuffer = [];
+  dashcamTimer = setInterval(grabDashcamFrame, 1000 / DASHCAM_FPS);
 }
 
 function stopDashcam() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
+  if (dashcamTimer) { clearInterval(dashcamTimer); dashcamTimer = null; }
+  dashcamBuffer = [];
+}
+
+function grabDashcamFrame() {
+  const video = document.getElementById('video');
+  if (!video || video.readyState < 2 || state.inReplay) return;
+  const w = video.videoWidth || 640, h = video.videoHeight || 480;
+  const off = document.createElement('canvas');
+  off.width = w; off.height = h;
+  const ctx = off.getContext('2d');
+  const mir = state.facingMode === 'user' && state.opts.mirror;
+  if (mir) { ctx.save(); ctx.translate(w, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, w, h);
+  if (mir) ctx.restore();
+  dashcamBuffer.push({
+    dataURL:    off.toDataURL('image/jpeg', 0.75),
+    landmarks:  state.landmarks ? state.landmarks.map(l => ({...l})) : null,
+    angles:     null, // computed during replay analysis
+    phase:      state.currentPhase,
+    w, h,
+  });
+  if (dashcamBuffer.length > DASHCAM_MAX) dashcamBuffer.shift();
+}
+
+// Called from onResults to keep landmarks fresh in buffer's last frame
+function dashcamCapture(landmarks, angles, phase) {
+  if (dashcamBuffer.length > 0) {
+    const last = dashcamBuffer[dashcamBuffer.length - 1];
+    last.landmarks = landmarks ? landmarks.map(l => ({...l})) : null;
+    last.angles    = angles ? {...angles} : null;
+    last.phase     = phase;
   }
-  mediaRecorder = null;
-  chunkBuffer = [];
-  chunkTimestamps = [];
 }
 
 // ─── CAPTURE ─────────────────────────────────────────────────────────────────
 function doCapture() {
-  if (!mediaRecorder || chunkBuffer.length === 0) {
-    setStatus('active', 'Keep camera live — try again');
+  if (dashcamBuffer.length < 3) {
+    setStatus('active', 'Keep live — building buffer...');
     return;
   }
-
-  // Freeze the current chunks
-  const chunks = chunkBuffer.slice();
-  capturedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'video/webm' });
-
   state.inReplay = true;
-  enterReplay(capturedBlob);
+  enterReplay(dashcamBuffer.slice());
 }
 
 // ─── ENTER REPLAY ─────────────────────────────────────────────────────────────
-function enterReplay(blob) {
+let replayFrameData    = [];
+let replayCurrentFrame = 0;
+let replayIsPlaying    = false;
+let replayRAF          = null;
+let replayInterval     = null;
+
+function enterReplay(frames) {
   document.getElementById('main').style.display        = 'none';
   document.getElementById('phase-bar').style.display   = 'none';
   document.getElementById('metrics-bar').style.display = 'none';
@@ -1350,104 +1357,19 @@ function enterReplay(blob) {
   document.getElementById('replay-panel').style.display = 'flex';
   document.getElementById('playback-controls').style.display = 'none';
   document.getElementById('processing-overlay').style.display = 'flex';
-  document.getElementById('proc-msg').textContent = 'Loading video...';
-  document.getElementById('proc-bar').style.width = '20%';
+  document.getElementById('proc-msg').textContent = 'Loading ' + frames.length + ' frames...';
+  document.getElementById('proc-bar').style.width = '30%';
 
-  const rv = document.getElementById('replay-video');
-  const url = URL.createObjectURL(blob);
-  rv.src = url;
-  rv.playbackRate = 0.5;
-  rv.load();
-
-  rv.onloadedmetadata = () => {
-    document.getElementById('proc-bar').style.width = '50%';
-    document.getElementById('proc-msg').textContent = 'Analyzing frames...';
-    analyzeVideoFrames(rv);
-  };
-
-  rv.onerror = () => {
-    document.getElementById('proc-msg').textContent = 'Video load failed — try again';
-  };
+  // Small delay then set up — no heavy analysis needed since we stored landmarks
+  setTimeout(() => {
+    replayFrameData = frames;
+    document.getElementById('proc-bar').style.width = '100%';
+    document.getElementById('proc-msg').textContent = 'Ready!';
+    setTimeout(() => finishReplaySetup(frames.length), 300);
+  }, 400);
 }
 
-// ─── FRAME ANALYSIS ───────────────────────────────────────────────────────────
-async function analyzeVideoFrames(videoEl) {
-  const duration = videoEl.duration;
-  replayFPS = 30;
-  const frameInterval = 1 / replayFPS;
-  const totalFrames = Math.floor(duration * replayFPS);
-  replayFrameData = [];
-
-  // Use offscreen canvas to extract frames and run pose
-  const offCanvas = document.createElement('canvas');
-  offCanvas.width  = videoEl.videoWidth  || 640;
-  offCanvas.height = videoEl.videoHeight || 480;
-  const offCtx = offCanvas.getContext('2d');
-
-  for (let i = 0; i < totalFrames; i++) {
-    const t = i * frameInterval;
-    videoEl.currentTime = t;
-    await new Promise(r => { videoEl.onseeked = r; });
-    offCtx.drawImage(videoEl, 0, 0, offCanvas.width, offCanvas.height);
-
-    // Run pose on this frame
-    let landmarks = null, angles = null, phase = 'unknown';
-    try {
-      await new Promise((resolve) => {
-        const tempOnResults = (results) => {
-          if (results.poseLandmarks) {
-            landmarks = results.poseLandmarks;
-            angles    = computeAngles(landmarks);
-            phase     = guessPhase(landmarks, angles);
-          }
-          resolve();
-        };
-        pose.onResults(tempOnResults);
-        pose.send({ image: offCanvas }).catch(resolve);
-      });
-    } catch(e) {}
-
-    replayFrameData.push({ time: t, landmarks, angles, phase });
-
-    // Progress bar
-    const pct = 50 + Math.round((i / totalFrames) * 45);
-    document.getElementById('proc-bar').style.width = pct + '%';
-    document.getElementById('proc-msg').textContent =
-      'Analyzing frame ' + (i+1) + ' / ' + totalFrames + '...';
-
-    // Yield to browser every 5 frames
-    if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
-  }
-
-  // Restore normal onResults
-  pose.onResults(onResults);
-
-  document.getElementById('proc-bar').style.width = '100%';
-  document.getElementById('proc-msg').textContent = 'Ready!';
-  await new Promise(r => setTimeout(r, 400));
-
-  finishReplaySetup(videoEl, totalFrames);
-}
-
-function guessPhase(lms, angles) {
-  if (!lms) return 'unknown';
-  const isRHP = state.isRHP;
-  const knee  = isRHP ? lms[26] : lms[25];
-  const hip   = isRHP ? lms[24] : lms[23];
-  const wrist = isRHP ? lms[16] : lms[15];
-  const shldr = isRHP ? lms[12] : lms[11];
-  if (!knee || !hip) return 'unknown';
-  const kneeUp  = knee.visibility > 0.4 && (hip.y - knee.y) > 0.05;
-  const armHigh = wrist && shldr && wrist.visibility > 0.4 && wrist.y < shldr.y;
-  if (kneeUp && !armHigh) return 'stride';
-  if (armHigh && angles?.elbow && angles.elbow < 110) return 'acceleration';
-  if (armHigh && angles?.elbow && angles.elbow >= 110) return 'release';
-  if (!kneeUp && armHigh) return 'followthrough';
-  if (!kneeUp && !armHigh && angles?.hip && angles.hip > 15) return 'footplant';
-  return 'windup';
-}
-
-function finishReplaySetup(videoEl, totalFrames) {
+function finishReplaySetup(totalFrames) {
   document.getElementById('processing-overlay').style.display = 'none';
   document.getElementById('playback-controls').style.display  = 'flex';
   document.getElementById('frame-timer').style.display = 'block';
@@ -1455,10 +1377,10 @@ function finishReplaySetup(videoEl, totalFrames) {
   const scrub = document.getElementById('replay-scrub');
   scrub.min = 0; scrub.max = totalFrames - 1; scrub.value = 0;
 
+  const secs = (totalFrames / DASHCAM_FPS).toFixed(1);
   document.getElementById('replay-status').textContent =
-    totalFrames + ' frames · ' + videoEl.duration.toFixed(1) + 's · ½ speed';
+    totalFrames + ' frames · ' + secs + 's · ½ speed playback';
 
-  // Reset drawing
   drawState.shapes = [];
   clearDrawCanvas();
   setupDrawCanvas();
@@ -1467,96 +1389,81 @@ function finishReplaySetup(videoEl, totalFrames) {
   replayIsPlaying    = false;
   document.getElementById('btn-play-pause').textContent = '▶ Play';
 
-  // Show first frame
-  seekReplayTo(0);
+  renderReplayFrame(0);
 }
 
-// ─── REPLAY PLAYBACK ──────────────────────────────────────────────────────────
-function seekReplayTo(frameIdx) {
-  frameIdx = Math.max(0, Math.min(replayFrameData.length - 1, frameIdx));
-  replayCurrentFrame = frameIdx;
+// ─── FRAME RENDERING ──────────────────────────────────────────────────────────
+function renderReplayFrame(idx) {
+  idx = Math.max(0, Math.min(replayFrameData.length - 1, idx));
+  replayCurrentFrame = idx;
+  const frame = replayFrameData[idx];
+  if (!frame) return;
 
-  const rv = document.getElementById('replay-video');
-  const fd = replayFrameData[frameIdx];
-  if (!fd) return;
+  document.getElementById('replay-scrub').value = idx;
+  document.getElementById('ft-frame').textContent = idx + 1;
+  document.getElementById('ft-time').textContent  = (idx / DASHCAM_FPS).toFixed(2);
 
-  rv.currentTime = fd.time;
-  document.getElementById('replay-scrub').value = frameIdx;
-  document.getElementById('ft-frame').textContent = frameIdx + 1;
-  document.getElementById('ft-time').textContent  = fd.time.toFixed(2);
-
-  // Draw skeleton on replay canvas
-  drawReplayFrame(fd);
-  updateReplayMetrics(fd);
-}
-
-function drawReplayFrame(fd) {
-  const rv     = document.getElementById('replay-video');
+  // Draw video frame on replay canvas
   const canvas = document.getElementById('replay-canvas');
-  canvas.width  = rv.videoWidth  || rv.clientWidth;
-  canvas.height = rv.videoHeight || rv.clientHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const img = new Image();
+  img.onload = () => {
+    canvas.width  = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    // Draw skeleton on top
+    if (frame.landmarks && state.opts.skeleton) {
+      drawSkeleton(ctx, frame.landmarks, canvas.width, canvas.height);
+    }
+    // Sync draw canvas size
+    const dc = document.getElementById('draw-canvas');
+    if (dc.width !== canvas.width || dc.height !== canvas.height) {
+      const saved = dc.getContext('2d').getImageData(0, 0, dc.width, dc.height);
+      dc.width = canvas.width; dc.height = canvas.height;
+      dc.getContext('2d').putImageData(saved, 0, 0);
+    }
+  };
+  img.src = frame.dataURL;
 
-  if (fd.landmarks && state.opts.skeleton) {
-    drawSkeleton(ctx, fd.landmarks, canvas.width, canvas.height);
-  }
+  updateReplayMetrics(frame);
 }
 
+// ─── HALF-SPEED PLAYBACK ──────────────────────────────────────────────────────
 function togglePlayPause() {
-  const rv = document.getElementById('replay-video');
   if (replayIsPlaying) {
     replayIsPlaying = false;
-    rv.pause();
-    if (replayRAF) { cancelAnimationFrame(replayRAF); replayRAF = null; }
+    clearInterval(replayInterval);
+    replayInterval = null;
     document.getElementById('btn-play-pause').textContent = '▶ Play';
   } else {
     replayIsPlaying = true;
-    rv.playbackRate = 0.5;
-    rv.play();
     document.getElementById('btn-play-pause').textContent = '⏸ Pause';
-    trackPlayback();
+    // Half speed = 2x the frame interval
+    const intervalMs = (1000 / DASHCAM_FPS) * 2;
+    replayInterval = setInterval(() => {
+      if (replayCurrentFrame >= replayFrameData.length - 1) {
+        replayIsPlaying = false;
+        clearInterval(replayInterval);
+        document.getElementById('btn-play-pause').textContent = '▶ Play';
+        return;
+      }
+      renderReplayFrame(replayCurrentFrame + 1);
+    }, intervalMs);
   }
-}
-
-function trackPlayback() {
-  const rv = document.getElementById('replay-video');
-  if (!replayIsPlaying) return;
-  if (rv.ended) {
-    replayIsPlaying = false;
-    document.getElementById('btn-play-pause').textContent = '▶ Play';
-    return;
-  }
-  // Find closest frame to current video time
-  const t = rv.currentTime;
-  let closest = 0, minDiff = Infinity;
-  for (let i = 0; i < replayFrameData.length; i++) {
-    const diff = Math.abs(replayFrameData[i].time - t);
-    if (diff < minDiff) { minDiff = diff; closest = i; }
-  }
-  if (closest !== replayCurrentFrame) {
-    replayCurrentFrame = closest;
-    document.getElementById('replay-scrub').value = closest;
-    document.getElementById('ft-frame').textContent = closest + 1;
-    document.getElementById('ft-time').textContent  = t.toFixed(2);
-    drawReplayFrame(replayFrameData[closest]);
-    updateReplayMetrics(replayFrameData[closest]);
-  }
-  replayRAF = requestAnimationFrame(trackPlayback);
 }
 
 function replayStep(delta) {
   if (replayIsPlaying) togglePlayPause();
-  seekReplayTo(replayCurrentFrame + delta);
+  renderReplayFrame(replayCurrentFrame + delta);
 }
 
 function scrubReplay(val) {
   if (replayIsPlaying) togglePlayPause();
-  seekReplayTo(parseInt(val));
+  renderReplayFrame(parseInt(val));
 }
 
-function updateReplayMetrics(fd) {
-  const a = fd.angles || {};
+function updateReplayMetrics(frame) {
+  const a = frame.angles || {};
   const grade = (key, val) => {
     if (val == null) return '';
     const b = BENCH[key]; if (!b) return '';
@@ -1568,14 +1475,13 @@ function updateReplayMetrics(fd) {
     el.className = 'm-val ' + grade(key, v);
   });
   const ph = document.getElementById('rv-phase');
-  if (ph) { ph.textContent = fd.phase || '—'; ph.className = 'm-val'; }
+  if (ph) { ph.textContent = frame.phase || '—'; ph.className = 'm-val'; }
 }
 
 // ─── EXIT REPLAY ─────────────────────────────────────────────────────────────
 function exitReplay() {
-  const rv = document.getElementById('replay-video');
-  rv.pause();
-  if (replayRAF) { cancelAnimationFrame(replayRAF); replayRAF = null; }
+  if (replayIsPlaying) togglePlayPause();
+  clearInterval(replayInterval);
   replayIsPlaying = false;
 
   document.getElementById('replay-panel').style.display = 'none';
